@@ -71,15 +71,17 @@ pub struct Win32System;
 fn monitors() -> Vec<MonitorInfo> {
     // Capacity headroom so the Vec never reallocates while the enum callback
     // is pushing (the callback dereferences the original pointer each time).
-    // `mut` is only used inside the callback, so the lint can't see it.
-    #[allow(unused_mut)]
     let mut handles: Vec<HMONITOR> = Vec::with_capacity(16);
     let ok = unsafe {
         EnumDisplayMonitors(
             None,
             None,
             Some(monitor_enum),
-            LPARAM(handles.as_ptr() as isize),
+            // The callback reinterprets LPARAM as *mut Vec<HMONITOR> — pass
+            // the Vec itself, never its buffer (ticket #5, 2026-11-12: the
+            // buffer pointer made every push land in the wrong place and the
+            // list come back empty, killing both auto-follow and the picker).
+            LPARAM(&mut handles as *mut Vec<HMONITOR> as isize),
         )
     };
     if ok.0 == 0 {
@@ -225,6 +227,27 @@ fn rect_from_win32(r: &RECT) -> Rect {
 fn wide_string(buf: &[u16; 32]) -> String {
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     String::from_utf16_lossy(&buf[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::seam::SystemAccess;
+
+    /// Real-seam smoke test (ticket #5 diagnosis, 2026-11-12): a running
+    /// Windows desktop always has at least one monitor, so an empty result
+    /// means the EnumDisplayMonitors callback path is broken — which takes
+    /// out everything downstream (the fills-monitor rule, the picker's
+    /// hover, and pinning). The brain is unit-tested with a fake system;
+    /// this is the one guard on the real IN path.
+    #[test]
+    fn real_system_reports_at_least_one_monitor() {
+        let sys = super::Win32System;
+        let mons = sys.monitors();
+        assert!(
+            !mons.is_empty(),
+            "monitors() returned no monitors — EnumDisplayMonitors callback bug"
+        );
+    }
 }
 
 impl SystemAccess for Win32System {
