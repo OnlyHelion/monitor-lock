@@ -9,49 +9,87 @@
 
 use crate::seam::{MonitorInfo, Point, Rect, SystemAccess, WindowInfo};
 
-use windows::core::{PCSTR, PCWSTR};
 use windows::Win32::Foundation::{LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
-use windows::Win32::UI::HiDpi::{
-    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
-};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowTextW, SetCursorPos,
+    ClipCursor, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowTextW,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos,
 };
+use windows::core::{PCSTR, PCWSTR};
 
 // UnClipCursor (WINBOOL WINAPI UnClipCursor(void)) is a plain user32
 // function that the windows 0.62.2 bindings do not expose. It cannot be
 // linked normally either: the Windows SDK 10.0.26100 user32.lib import
 // library omits it (verified: ClipCursor is present, UnClipCursor is not),
 // so it is resolved at runtime from the already-loaded user32.dll.
-static UN_CLIP_CURSOR: std::sync::OnceLock<unsafe extern "system" fn()> =
+//
+// The export is NOT guaranteed to be present in the DLL either: on the
+// 2026-11-12 test machine (Win11, SDK 26100) GetProcAddress(user32,
+// "UnClipCursor") returns NULL while ClipCursor resolves, and the panic
+// that result used to cause killed the poll thread at startup (ticket #5).
+// Resolution is therefore fallible: when the export is absent we fall back
+// to clipping to the whole virtual screen, which is functionally "no clip".
+static UN_CLIP_CURSOR: std::sync::OnceLock<Option<unsafe extern "system" fn()>> =
     std::sync::OnceLock::new();
 
-fn un_clip_cursor() {
+/// Release any cursor clip: UnClipCursor when the export is present,
+/// otherwise the virtual-screen fallback (functionally equivalent for a
+/// multi-monitor app — the cursor is free on every monitor).
+fn release_clip() {
     let f = *UN_CLIP_CURSOR.get_or_init(|| {
         unsafe {
             // user32.dll is always loaded in a Windows process.
-            let module: Vec<u16> =
-                "user32.dll".encode_utf16().chain(std::iter::once(0)).collect();
-            let h = GetModuleHandleW(PCWSTR(module.as_ptr()))
-                .expect("user32.dll is loaded in every Windows process");
+            let module: Vec<u16> = "user32.dll"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let Ok(h) = GetModuleHandleW(PCWSTR(module.as_ptr())) else {
+                return None;
+            };
             let name: Vec<u8> = b"UnClipCursor\0".to_vec();
             let Some(resolved) = GetProcAddress(h, PCSTR(name.as_ptr().cast())) else {
-                panic!("UnClipCursor is a public user32 export");
+                return None;
             };
             // The crate types FARPROC with a placeholder return type, so
             // transmute to the real signature: WINBOOL WINAPI UnClipCursor(void).
-            std::mem::transmute::<
+            Some(std::mem::transmute::<
                 unsafe extern "system" fn() -> isize,
                 unsafe extern "system" fn(),
-            >(resolved)
+            >(resolved))
         }
     });
-    unsafe { f() };
+    match f {
+        Some(f) => unsafe { f() },
+        None => clip_to_virtual_screen(),
+    }
+}
+
+/// Clip the cursor to the whole virtual screen — every pixel of every
+/// monitor — which is functionally "no clip". Besides standing in for a
+/// missing UnClipCursor, this is what makes set_cursor_clip's "clear first"
+/// step correct: repeated ClipCursor calls intersect, so clipping to the
+/// full virtual screen removes any pre-existing clip before a new one.
+fn clip_to_virtual_screen() {
+    unsafe {
+        let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        let r = RECT {
+            left: x,
+            top: y,
+            right: x + cx,
+            bottom: y + cy,
+        };
+        let _ = ClipCursor(Some(&r));
+    }
 }
 
 /// Enable per-monitor v2 DPI awareness. MUST be the first statement of main,
@@ -161,7 +199,7 @@ fn cursor_position() -> Point {
 /// Windows state, so any existing clip is removed first; the result is that
 /// the clip is exactly `rect`.
 fn set_cursor_clip(rect: Rect) {
-    un_clip_cursor();
+    release_clip();
     unsafe {
         let r = RECT {
             left: rect.x,
@@ -176,7 +214,7 @@ fn set_cursor_clip(rect: Rect) {
 /// OUT — clear the cursor clip. Called at startup (stale-clip cleanup), on
 /// every Lock release, and on exit.
 fn clear_cursor_clip() {
-    un_clip_cursor();
+    release_clip();
 }
 
 /// OUT — move the cursor (re-center on engage).
@@ -247,6 +285,16 @@ mod tests {
             !mons.is_empty(),
             "monitors() returned no monitors — EnumDisplayMonitors callback bug"
         );
+    }
+
+    /// Real-seam regression guard (ticket #5, 2026-11-12): on the test
+    /// machine's user32.dll build the UnClipCursor export is missing, and
+    /// the old code panicked here, killing the poll thread at startup
+    /// (before any monitor was ever read). Releasing the clip must work —
+    /// via the virtual-screen fallback — without panicking.
+    #[test]
+    fn real_system_releases_the_cursor_clip_without_panic() {
+        super::release_clip();
     }
 }
 

@@ -1,23 +1,21 @@
 # NEXT.md — Monitor Lock
 
 ## State now
-- Project: K:\monitor-lock (git; master = 2 docs commits, pushed: github.com/OnlyHelion/monitor-lock, public).
-- /implement-spec for spec #1: ALL agent-doable work DONE (2026-11-12). Integration branch `implement/spec-1-monitor-lock` @ 22d7c41 pushed to origin; `cargo test` 43/43; `cargo build --release` OK.
-- Release exe: `K:\monitor-lock\target\release\monitor-lock.exe` (7.9 MB, 2026-11-12).
-- Tracker: #2–#4 CLOSED with comments; #1 open (spec); #5 OPEN for the USER — in-game hand-check, steps in its #5 comment (issue comment 6812768234). Worktrees removed; PC shut down (user permission 2026-11-12 01:22).
-- Only remaining work is #5: the user plays a real borderless game and confirms. Nothing in #5 is done until the user confirms in-game.
+- Project: K:\monitor-lock (git; public github.com/OnlyHelion/monitor-lock). Branch `implement/spec-1-monitor-lock`, pushed after the next commit.
+- #5 hand-check FAILED twice (user 2026-11-12 09:43/09:45, then panic log ~09:5x). TWO independent bugs, both fixed + verified (real-seam tests red→green, `cargo test` 45/45):
+  1. `monitors()` passed the Vec's BUFFER to the `EnumDisplayMonitors` callback → monitor list always empty (commit bf3cacf).
+  2. `UnClipCursor` `GetProcAddress` resolution PANICKED — the export is absent by name from this machine's user32.dll → poll thread died at startup (first stale-clip cleanup). Fix: `release_clip()` falls back to ClipCursor(whole virtual screen) when the export is missing. Detail: `docs/ledgers/monitor-lock.md` (DIAGNOSIS 09:50 + DIAGNOSIS-2 10:10 lines).
+- NEW exe: `K:\monitor-lock\target\release\monitor-lock.exe` (7,964,160 bytes, 2026-11-12 10:10:16). Old process fully dead (build succeeded without lock).
 
-## Next step (for the user / next session)
-1. Run the hand-check per the #5 comment: run the exe; start a borderless game filling a monitor → cursor confined to that monitor's FULL bounds (incl. under the taskbar); alt-tab away → release; a maximized browser must NOT engage; picker (tray → Pick monitor; click = pin, Esc = cancel; Back to auto); exit clears the clip.
-2. If a borderless game covering only the work area does NOT engage: lower `FILL_THRESHOLD` in `src/core.rs` (0.97; a maximized browser measures 95.6–96.7% of full bounds), `cargo build --release`, retest; record the final value in a comment on #5.
-3. Watch items: a click on the on-demand window during the picker also counts as the global pin click; border fixed at 5 physical px (no DPI scaling); pinning does NOT make windowed games engage (open spec item).
-4. On user confirmation: `gh issue close 5 --repo OnlyHelion/monitor-lock --comment '<verdict>'` (and #1 if the spec is fully accepted).
+## Next step
+1. User re-runs the #5 hand-check on the NEW exe (steps in the #5 comment, issue comment 6812768234): borderless game filling a monitor → cursor confined to FULL bounds (incl. under taskbar); alt-tab → release; maximized browser must NOT engage; picker (tray → Pick monitor; click = pin, Esc = cancel; Back to auto); exit clears the clip.
+2. On user confirmation: `gh issue close 5 --repo OnlyHelion/monitor-lock --comment '<verdict>'` (+ #1 if spec accepted). If a borderless game covering only the work area does NOT engage: lower `FILL_THRESHOLD` in `src/core.rs` (0.97; a maximized browser measures 95.6–96.7%), rebuild, retest, record the value in a #5 comment.
+3. Optional clarification for the user: what "copy pasting it also crashed the app" meant (likely: copied the exe, ran the copy).
 
-## Detection edge (baked into #2's rule, arbitrated in #5)
-- "fills" = FULL monitor bounds (incl. under the taskbar), single tunable threshold FILL_THRESHOLD=0.97. A maximized browser (work area ≈ 95.6–96.7% of full bounds) must NOT engage; a borderless-maximized game covering only the work area might then miss — adjust in #5.
-
-## Open item (from spec)
-- Pinning does NOT make windowed games trigger the Lock (fills-monitor activation in both modes). Flagged to user; no response yet.
-
-## Open assumptions (UNVERIFIED)
-- "borderless/windowed" = windowed-fullscreen (fills the monitor, no border).
+## Watch items
+- This machine's user32.dll lacks `UnClipCursor` by name (unusual; ClipCursor/SetCursorPos present) — the virtual-screen fallback is what makes the app work here; keep it.
+- A click on the on-demand window during the picker also counts as the global pin click; border fixed at 5 physical px; pinning does NOT make windowed games engage (open spec item, flagged to user).
+- No PC shutdown while the user is testing (the 01:22 permission is superseded).
+- UNTESTED-VISUAL (still): tray icon rendering, window display, overlay ring, picker feel, real clip — user validating on the new exe.
+- If the user is testing again, the exe is locked: ask them to Exit before any `cargo build --release`.
+- The tree is NOT `cargo fmt`-clean (app.rs/core.rs/main.rs/overlay.rs/seam.rs reformat under the current rustfmt; left as-is — don't drag into fix commits).
