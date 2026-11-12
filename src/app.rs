@@ -286,10 +286,13 @@ pub fn install_tray_handlers(ctx: egui::Context, cmd_tx: mpsc::Sender<UiCommand>
     }));
 }
 
-/// A simple generated padlock icon (32x32 RGBA, transparent background) —
-/// "default icon for now" (spec): custom icon art is out of scope. One per
-/// Lock state (amber = engaged, gray = released).
-fn padlock_icon(rgb: (u8, u8, u8)) -> Icon {
+/// The padlock art as 32x32 top-down RGBA pixels, transparent background —
+/// the single source of the icon (spec: "default icon for now", custom art
+/// out of scope). Both the tray icon (amber = engaged, gray = released) and
+/// res/icon.ico (the exe icon, embedded by build.rs) are rendered from it;
+/// keep the .ico in sync — `icon_tests::the_ico_is_the_amber_tray_icon`
+/// fails if it drifts.
+fn padlock_rgba(rgb: (u8, u8, u8)) -> Vec<u8> {
     const S: u32 = 32;
     let mut rgba = vec![0u8; (S * S * 4) as usize];
     for y in 0..S {
@@ -314,5 +317,55 @@ fn padlock_icon(rgb: (u8, u8, u8)) -> Icon {
             }
         }
     }
-    Icon::from_rgba(rgba, S, S).expect("a 32x32 RGBA buffer is a valid icon")
+    rgba
+}
+
+/// A simple generated padlock icon (32x32 RGBA, transparent background).
+/// One per Lock state (amber = engaged, gray = released).
+fn padlock_icon(rgb: (u8, u8, u8)) -> Icon {
+    Icon::from_rgba(padlock_rgba(rgb), 32, 32).expect("a 32x32 RGBA buffer is a valid icon")
+}
+
+#[cfg(test)]
+mod icon_tests {
+    //! Asset sync, not thin-layer behavior: res/icon.ico (the exe icon,
+    //! embedded by build.rs) must stay identical to the amber tray icon, or
+    //! the exe and the tray would show different padlocks.
+
+    use super::*;
+
+    #[test]
+    fn the_ico_is_the_amber_tray_icon() {
+        let ico = std::fs::read("res/icon.ico").expect("res/icon.ico is checked in");
+        // ICONDIR: reserved, type, count.
+        let count = u16::from_le_bytes(ico[4..6].try_into().unwrap()) as usize;
+        assert_eq!(count, 1, "one image: the 32x32 padlock");
+        // ICONDIRENTRY: width, height, ..., offset.
+        let (w, h) = (u32::from(ico[6]), u32::from(ico[7]));
+        let offset = u32::from_le_bytes(ico[18..22].try_into().unwrap()) as usize;
+        assert_eq!((w, h, offset), (32, 32, 22));
+        // Image data: BITMAPINFOHEADER, then bottom-up BGRA rows (the AND
+        // mask follows the pixels).
+        let bih_w = i32::from_le_bytes(ico[offset + 4..offset + 8].try_into().unwrap());
+        let bih_h = i32::from_le_bytes(ico[offset + 8..offset + 12].try_into().unwrap());
+        let bpp = u16::from_le_bytes(ico[offset + 14..offset + 16].try_into().unwrap());
+        assert_eq!((bih_w, bih_h, bpp), (32, 64, 32));
+        let px = &ico[offset + 40..];
+        let mut top_down = vec![0u8; 32 * 32 * 4];
+        for y in 0..32usize {
+            for x in 0..32usize {
+                let d = ((31 - y) * 32 + x) * 4; // bottom-up BGRA
+                let s = (y * 32 + x) * 4;
+                top_down[s] = px[d + 2];
+                top_down[s + 1] = px[d + 1];
+                top_down[s + 2] = px[d];
+                top_down[s + 3] = px[d + 3];
+            }
+        }
+        assert_eq!(
+            top_down,
+            padlock_rgba((255, 191, 64)),
+            "the exe's icon must be the amber padlock (regenerate res/icon.ico)"
+        );
+    }
 }

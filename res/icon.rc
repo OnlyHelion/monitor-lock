@@ -1,0 +1,5 @@
+/* The exe's icon (Explorer, taskbar, Alt+Tab): the same amber padlock the
+   tray shows. icon.ico is generated from padlock_rgba in src/app.rs; the
+   test icon_tests::the_ico_is_the_amber_tray_icon fails if the two drift
+   apart. */
+1 ICON "icon.ico"
