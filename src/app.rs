@@ -84,9 +84,11 @@ impl eframe::App for MonitorLockApp {
         {
             let ctx = ui.ctx();
             if ctx.input(|i| i.viewport().close_requested()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                // Close hides the window; the app lives in the tray. Without
+                // CancelClose the window closes for real and the app exits.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                win32::hide_main_window();
             }
-            drain_tray_events(&ctx, &self.cmd_tx);
         }
         // Lock-state changes reported by the poll thread: swap the tray icon.
         while let Ok(engaged) = self.state_rx.try_recv() {
@@ -103,37 +105,26 @@ impl eframe::App for MonitorLockApp {
             ui.heading("Monitor Lock");
             ui.separator();
 
-            ui.label(format!("Foreground window: {}", foreground_label(&snap)));
-            ui.label(format!("Game window: {}", game_window_label(&snap)));
-
-            ui.label(format!("Monitors: {}", snap.monitors.len()));
-            for m in &snap.monitors {
-                ui.label(format!("  {}", format_monitor(&m.id, &m.bounds)));
-            }
-
-            if snap.picking {
-                ui.label(egui::RichText::new(
-                    "Monitor picker: move to a monitor — click to pin, Esc to cancel",
-                )
-                .color(egui::Color32::from_rgb(255, 255, 0)));
-            }
-
-            ui.separator();
+            // The essentials: the Lock state, its target, and the pin.
             match &snap.lock {
                 core::LockState::Released => {
-                    ui.label(egui::RichText::new("Lock: released")
-                        .color(egui::Color32::from_rgb(136, 136, 136)));
+                    ui.label(
+                        egui::RichText::new("Lock: released")
+                            .color(egui::Color32::from_rgb(136, 136, 136)),
+                    );
                 }
                 core::LockState::Engaged { window_title, .. } => {
-                    ui.label(egui::RichText::new(format!(
-                        "Lock: engaged — {}",
-                        if window_title.is_empty() {
-                            "window with no title"
-                        } else {
-                            window_title
-                        }
-                    ))
-                    .color(egui::Color32::from_rgb(80, 200, 120)));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Lock: engaged — {}",
+                            if window_title.is_empty() {
+                                "window with no title"
+                            } else {
+                                window_title
+                            }
+                        ))
+                        .color(egui::Color32::from_rgb(80, 200, 120)),
+                    );
                 }
             }
 
@@ -145,9 +136,19 @@ impl eframe::App for MonitorLockApp {
                     "Target monitor (pinned): {}",
                     format_monitor(&pinned.monitor_id, &pinned.monitor_bounds)
                 ));
-                // Pin mode engages on ANY focused window (no fills-monitor
-                // requirement); the desktop is the release.
-                ui.label("Pinned: engages while any window has focus — click the desktop or Back to auto to release");
+                // Pin mode is click-driven: any focus change suspends the
+                // lock; a click inside the pinned monitor re-locks, a click
+                // outside it drops the pin.
+                if matches!(snap.lock, core::LockState::Released) && !snap.picking {
+                    ui.label(
+                        egui::RichText::new(
+                            "Pinned (suspended): click inside this monitor to re-lock, click elsewhere to drop the pin",
+                        )
+                        .color(egui::Color32::from_rgb(255, 191, 64)),
+                    );
+                } else {
+                    ui.label("Pinned: Alt+Tab or any focus change suspends the lock");
+                }
             } else if let Some(game) = &snap.game_window {
                 ui.label(format!(
                     "Target monitor (auto): {}",
@@ -155,6 +156,15 @@ impl eframe::App for MonitorLockApp {
                 ));
             } else {
                 ui.label("Target monitor: — (no game window)");
+            }
+
+            if snap.picking {
+                ui.label(
+                    egui::RichText::new(
+                        "Monitor picker: move to a monitor — click to pin, Esc to cancel",
+                    )
+                    .color(egui::Color32::from_rgb(255, 255, 0)),
+                );
             }
 
             ui.separator();
@@ -172,6 +182,31 @@ impl eframe::App for MonitorLockApp {
                     exit_app();
                 }
             });
+
+            // Everything else is diagnostics, one click away.
+            ui.separator();
+            egui::CollapsingHeader::new("Details")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(format!("Foreground window: {}", foreground_label(&snap)));
+                    ui.label(format!("Game window: {}", game_window_label(&snap)));
+                    ui.label(format!("Monitors: {}", snap.monitors.len()));
+                    for m in &snap.monitors {
+                        ui.label(format!("  {}", format_monitor(&m.id, &m.bounds)));
+                    }
+                    if snap.clip_reasserts > 0 {
+                        ui.label(format!(
+                            "Another program reset the cursor clip {} time(s); the lock put it back and the mouse guard kept the cursor in{}",
+                            snap.clip_reasserts,
+                            match snap.foreign_clip {
+                                Some(r) => {
+                                    format!(" (last: {},{} {}x{})", r.x, r.y, r.width, r.height)
+                                }
+                                None => String::new(),
+                            }
+                        ));
+                    }
+                });
         });
 
         // Live-updates: repaint on the poll cadence even without input.
@@ -211,34 +246,44 @@ fn format_monitor(id: &str, bounds: &Rect) -> String {
     format!("{}  ({}, {}) {}x{}", id, bounds.x, bounds.y, bounds.width, bounds.height)
 }
 
-/// Drain tray events on the UI thread: left-click opens the on-demand window;
-/// the menu items are commands (`pick` / `auto` are forwarded to the poll
-/// thread, which applies them to the brain).
-fn drain_tray_events(ctx: &egui::Context, cmd_tx: &mpsc::Sender<UiCommand>) {
-    while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-        if let TrayIconEvent::Click {
-            button: MouseButton::Left,
-            ..
-        } = event
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+/// Install the tray and menu event handlers. They run as soon as an event
+/// arrives, independent of whether the (possibly hidden) window is being
+/// repainted: left-click / Open shows the on-demand window; `pick` / `auto`
+/// are forwarded to the poll thread, which applies them to the brain; Exit
+/// clears the clip and quits.
+pub fn install_tray_handlers(ctx: egui::Context, cmd_tx: mpsc::Sender<UiCommand>) {
+    let show = {
+        let ctx = ctx.clone();
+        move || {
+            win32::show_main_window();
+            ctx.request_repaint();
         }
+    };
+    {
+        let show = show.clone();
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
+                show();
+            }
+        }));
     }
-    while let Ok(event) = MenuEvent::receiver().try_recv() {
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         match event.id.0.as_str() {
-            "open" => ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true)),
+            "open" => show(),
             "pick" => {
                 let _ = cmd_tx.send(UiCommand::StartPicker);
             }
             "auto" => {
                 let _ = cmd_tx.send(UiCommand::BackToAuto);
             }
-            "exit" => {
-                exit_app();
-            }
+            "exit" => exit_app(),
             _ => {}
         }
-    }
+    }));
 }
 
 /// A simple generated padlock icon (32x32 RGBA, transparent background) —

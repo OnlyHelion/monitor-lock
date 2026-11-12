@@ -99,9 +99,19 @@ pub struct WindowInfo {
 /// cursor move is the re-center on engage.
 pub trait SystemAccess {
     fn monitors(&self) -> Vec<MonitorInfo>;
-    /// None = the desktop (no foreground window) — never a Game window.
+    /// None = the desktop, shell UI or the Alt+Tab switcher (no real
+    /// foreground window) — never a Game window, never locked on.
     fn foreground_window(&self) -> Option<WindowInfo>;
     fn cursor_position(&self) -> Point;
+    /// The cursor clip currently in effect (the whole virtual screen when
+    /// none is set). Windows and other apps can release the clip behind the
+    /// Lock's back; the brain compares this with its target and re-applies.
+    fn cursor_clip(&self) -> Rect;
+    /// True while a mouse button is down (or was pressed since the last
+    /// call, so a click shorter than one tick is not missed). Clicks on the
+    /// utility's own windows (tray menu, on-demand window) report false.
+    /// The brain derives the rising edge ("a click") itself.
+    fn mouse_button_down(&self) -> bool;
     /// Set the cursor clip to `rect` (the Lock's confinement while engaged).
     fn set_cursor_clip(&mut self, rect: Rect);
     /// Remove the cursor clip (on every Lock release, startup, and exit).

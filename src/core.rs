@@ -17,15 +17,27 @@
 //!
 //! The Monitor override: pinning a monitor (via the Monitor picker) changes
 //! the Lock's target from the Game monitor to the pinned monitor AND drops
-//! the fills-monitor requirement: while a pin is active, the Lock engages on
-//! the pinned monitor whenever a REAL (non-desktop) window is foreground —
-//! a windowed game with a title bar, or any window, keeps the cursor on the
-//! pinned monitor (the "pin as backup", user decision 2026-11-12). The
-//! desktop background is the release (the Escape hatch in pin mode); any
-//! window regaining focus re-engages on the pinned monitor. Without a pin,
-//! only a fills-monitor Game window activates the Lock. Back to auto
-//! restores following the Game monitor. No persistence: a pin lasts only for
-//! the current run.
+//! the fills-monitor requirement (the "pin as backup", user decision
+//! 2026-11-12). Pin mode is click-driven (user decision 2026-11-12, grill):
+//! - Any foreground change away from the locked window (Alt+Tab, the Win
+//!   key, the taskbar, the desktop, a window stealing focus) SUSPENDS the
+//!   Lock: the clip is released and the pin stays armed. Shell UI (desktop,
+//!   taskbar, Start, the Alt+Tab switcher) is reported by the seam as "no
+//!   real foreground window" and never locks.
+//! - While suspended, focus alone never re-locks. A mouse click INSIDE the
+//!   pinned monitor re-engages on the foreground window (any real window, no
+//!   fills-monitor requirement); a click on shell UI there keeps the pin and
+//!   stays suspended.
+//! - A click OUTSIDE the pinned monitor while suspended DROPS the pin (back
+//!   to auto) in that same tick, so auto can lock at once if the clicked
+//!   window fills its monitor. The user is never trapped.
+//! - Picking a monitor pins it and engages at once on a real foreground
+//!   window (the pick click is the re-engage click).
+//!
+//! Without a pin, only a focused fills-monitor Game window activates the
+//! Lock, and focus alone re-engages it (no click). Back to auto restores
+//! following the Game monitor. No persistence: a pin lasts only for the
+//! current run.
 //!
 //! The Monitor picker: explicit trigger only (a start-picker command from the
 //! UI). While active: the clip is cleared (cursor free on all monitors), the
@@ -68,7 +80,26 @@ pub struct LockCore {
     /// the cursor is tracked for the outline, and the state machine is
     /// suspended. Set only by an explicit start-picker command.
     picking: bool,
+    /// Whether a mouse button was down at the previous tick (for the click's
+    /// rising edge).
+    mouse_was_down: bool,
+    /// Remaining ticks in which the foreground window is (re-)engaged on the
+    /// pinned monitor after a click inside it. A click moves focus a few ms
+    /// after the button goes down, so a poll can see the click before the
+    /// focus change; the grace lets the lock follow the clicked window.
+    click_grace: u8,
+    /// A fresh pin whose engage click (the pick click) is not yet applied.
+    engage_pending: bool,
+    /// How many times the clip was found released behind the Lock's back
+    /// while engaged and re-applied (shown in the window as a diagnostic).
+    clip_reasserts: u32,
+    /// What the clip was changed to the last time something other than the
+    /// Lock changed it while engaged (diagnostic: who released it).
+    foreign_clip: Option<Rect>,
 }
+
+/// Ticks of click grace (the click's own tick plus two more, ~300 ms).
+const CLICK_GRACE_TICKS: u8 = 3;
 
 impl LockCore {
     pub fn new() -> Self {
@@ -77,6 +108,11 @@ impl LockCore {
             lock: LockState::Released,
             pin: None,
             picking: false,
+            mouse_was_down: false,
+            click_grace: 0,
+            engage_pending: false,
+            clip_reasserts: 0,
+            foreign_clip: None,
         }
     }
 
@@ -131,6 +167,9 @@ impl LockCore {
             .find(|m| m.bounds.contains(cursor))
             .map(|m| m.id.clone());
         self.picking = false;
+        // The pick click is the re-engage click: engage at once on a real
+        // foreground window (shell UI keeps the pin suspended).
+        self.engage_pending = self.pin.is_some();
     }
 
     /// Monitor picker: the observed Esc. End the picker without pinning —
@@ -144,6 +183,8 @@ impl LockCore {
     pub fn back_to_auto(&mut self) {
         self.pin = None;
         self.picking = false;
+        self.engage_pending = false;
+        self.click_grace = 0;
     }
 
     /// One Auto-follow focus tick: read the observation, run the state
@@ -169,7 +210,14 @@ impl LockCore {
         // The Monitor override, resolved against this tick's monitors: the
         // pin is void when the pinned monitor no longer exists (the target
         // falls back to the Game monitor).
-        let pinned = self.resolve_pin(&monitors);
+        let mut pinned = self.resolve_pin(&monitors);
+
+        // The click (rising edge of any mouse button). Tracked every tick,
+        // including while picking, so a button held across the end of the
+        // picker is not mistaken for a new click.
+        let down = sys.mouse_button_down();
+        let click = down && !self.mouse_was_down;
+        self.mouse_was_down = down;
 
         if self.picking {
             // The Monitor picker is active: the cursor is free on all
@@ -194,23 +242,57 @@ impl LockCore {
                 pinned,
                 picking: true,
                 picker_hover,
+                clip_reasserts: self.clip_reasserts,
+                foreign_clip: self.foreign_clip,
             };
+        }
+
+        // Pin mode is click-driven. Decide whether this tick carries an
+        // engage click: a click inside the pinned monitor (or the fresh pick
+        // click). A click outside the pinned monitor while the Lock is
+        // suspended drops the pin; auto then decides this same tick.
+        let mut engage_click = false;
+        if let Some(pin_target) = &pinned {
+            if std::mem::take(&mut self.engage_pending) {
+                self.click_grace = CLICK_GRACE_TICKS;
+            }
+            if click {
+                if pin_target.monitor_bounds.contains(sys.cursor_position()) {
+                    self.click_grace = CLICK_GRACE_TICKS;
+                } else if matches!(self.lock, LockState::Released) {
+                    self.pin = None;
+                    self.click_grace = 0;
+                    pinned = None;
+                }
+            }
+            if foreground.is_none() {
+                // Shell UI / the Alt+Tab switcher: nothing to engage on, and
+                // the click's grace must not outlive it.
+                self.click_grace = 0;
+            }
+            if pinned.is_some() && self.click_grace > 0 {
+                self.click_grace -= 1;
+                engage_click = true;
+            }
+        } else {
+            self.engage_pending = false;
+            self.click_grace = 0;
         }
 
         // The Lock's target and its activation window. Without a pin: the
         // target is the Game monitor and only a fills-monitor Game window
         // activates the Lock (the Auto-follow focus rule). With a pin
-        // (Monitor override): the target is the pinned monitor and ANY real
-        // (non-desktop) foreground window activates it — no fills-monitor
-        // requirement (the "pin as backup": a windowed game with a title bar
-        // keeps the cursor on the pinned monitor; user decision 2026-11-12).
-        // The desktop background is the release in pin mode (the Escape
-        // hatch); another window does not release — it re-engages on the
-        // pinned monitor.
+        // (Monitor override): the target is the pinned monitor; the Lock
+        // holds on the window it is engaged on and otherwise engages on the
+        // real foreground window only on an engage click (no fills-monitor
+        // requirement, the "pin as backup"). Any other foreground change
+        // has no activation window, so the Lock suspends.
+        let engaged_now = Self::engaged_identity(&self.lock);
         let (activation_window, target) = match (&pinned, &game_window) {
             (Some(pinned_target), _) => (
                 foreground
                     .as_ref()
+                    .filter(|w| engage_click || engaged_now == Some(w.identity))
                     .map(|w| DetectedGameWindow {
                         identity: w.identity,
                         title: w.title.clone(),
@@ -277,13 +359,14 @@ impl LockCore {
                     monitor_bounds: target.monitor_bounds,
                 };
             }
-            // RELEASE: no activation window — auto: the foreground is no
-            // longer a Game window (another window or the desktop); pin: the
-            // desktop (another window re-engages on the pinned monitor) —
-            // while the Lock is engaged. The release is immediate and
-            // unconditional — that focus-loss release IS the Escape hatch.
-            // No clip is set while released. A Monitor override is
-            // unaffected: the pin survives a focus loss.
+            // RELEASE: no activation window. Auto: the foreground is no
+            // longer a Game window (another window, shell UI, the Alt+Tab
+            // switcher). Pin: the foreground changed without a click inside
+            // the pinned monitor (the suspend). Only while the Lock is
+            // engaged. The release is immediate and unconditional: that
+            // focus-loss release IS the Escape hatch. No clip is set while
+            // released. A Monitor override is unaffected: the pin survives
+            // a suspend.
             (None, LockState::Engaged { .. }) => {
                 sys.clear_cursor_clip();
                 self.lock = LockState::Released;
@@ -294,6 +377,12 @@ impl LockCore {
             _ => {}
         }
 
+        // While engaged the clip must stay in force. Windows and other apps
+        // can release it behind the Lock's back (a focus or desktop switch,
+        // a game calling ClipCursor(NULL)); the Lock would then still read
+        // "engaged" with the cursor free. Re-apply it.
+        self.guard_clip(sys);
+
         LockSnapshot {
             monitors,
             foreground,
@@ -302,6 +391,24 @@ impl LockCore {
             pinned,
             picking: false,
             picker_hover: None,
+            clip_reasserts: self.clip_reasserts,
+            foreign_clip: self.foreign_clip,
+        }
+    }
+
+    /// While engaged, keep the clip in force: if something released or
+    /// changed it, put it back. Cheap (one GetClipCursor), so the thin layer
+    /// calls it every ~10 ms between ticks: a cursor that slips out while the
+    /// clip is released is pulled back in by the next ClipCursor call, so the
+    /// escape lasts one guard interval at most.
+    pub fn guard_clip(&mut self, sys: &mut dyn SystemAccess) {
+        if let LockState::Engaged { monitor_bounds, .. } = &self.lock {
+            let now = sys.cursor_clip();
+            if now != *monitor_bounds {
+                self.foreign_clip = Some(now);
+                sys.set_cursor_clip(*monitor_bounds);
+                self.clip_reasserts = self.clip_reasserts.saturating_add(1);
+            }
         }
     }
 
@@ -392,6 +499,12 @@ pub struct LockSnapshot {
     /// While the Monitor picker is active: the monitor under the cursor (the
     /// one a click would pin), or None when the cursor is over no monitor.
     pub picker_hover: Option<MonitorInfo>,
+    /// Times the clip was found released behind the Lock's back and
+    /// re-applied; a diagnostic for the window.
+    pub clip_reasserts: u32,
+    /// What the clip was changed to by something other than the Lock (the
+    /// last time it happened), if ever.
+    pub foreign_clip: Option<Rect>,
 }
 
 /// The Lock's target monitor: a monitor's id and its current FULL bounds —
@@ -1364,57 +1477,6 @@ mod tests {
     }
 
     #[test]
-    fn reengage_with_pin_recenters_the_cursor_on_the_pinned_monitor() {
-        // The cursor is always ON the pinned monitor at the click (the pin is
-        // resolved from the cursor), so the re-center rule for the pinned
-        // target bites on the later re-engage: focus loss, the user works on
-        // another monitor, the Game regains focus.
-        let mut fake = FakeSystem::new();
-        two_monitors(&mut fake);
-        fake.set_foreground(Some(game_on_m1(100)));
-        fake.set_cursor(Point { x: 3000, y: 720 }); // on m2
-        let mut brain = LockCore::new();
-        brain.start_picker(&mut fake);
-        brain.update(&mut fake);
-        brain.confirm_picker(&mut fake); // pin m2
-        let snap = brain.update(&mut fake);
-        assert!(
-            matches!(
-                snap.lock,
-                LockState::Engaged { monitor_id, .. } if monitor_id == "m2"
-            ),
-            "the Lock re-engages on the pinned monitor (cursor on m2: no re-center)"
-        );
-        assert!(fake.cursor_moves().is_empty());
-
-        // Focus loss (Alt+Tab): the user works on m1, the cursor moves there.
-        fake.set_foreground(None);
-        fake.set_cursor(Point { x: 960, y: 540 });
-        let snap = brain.update(&mut fake);
-        assert!(
-            matches!(snap.lock, LockState::Released),
-            "the focus loss releases the Lock (the Escape hatch)"
-        );
-
-        // The Game regains focus: re-engage on the pinned monitor, and the
-        // cursor (on m1) is re-centered on m2.
-        fake.set_foreground(Some(game_on_m1(100)));
-        let snap = brain.update(&mut fake);
-        assert!(
-            matches!(
-                snap.lock,
-                LockState::Engaged { monitor_id, .. } if monitor_id == "m2"
-            ),
-            "the re-engage targets the pinned monitor"
-        );
-        assert_eq!(
-            fake.cursor_moves(),
-            vec![Point { x: 3200, y: 720 }],
-            "the re-center rule applies to the pinned target: the cursor, outside m2, is moved to m2's center"
-        );
-    }
-
-    #[test]
     fn esc_cancels_the_picker_without_changing_the_target() {
         let mut fake = FakeSystem::new();
         two_monitors(&mut fake);
@@ -1611,118 +1673,351 @@ mod tests {
         );
     }
 
-    /// Pin mode (user decision 2026-11-12, ticket #5): while a pin is
-    /// active the fills-monitor requirement is dropped — the Lock engages on
-    /// the pinned monitor for ANY real (non-desktop) foreground window, e.g.
-    /// a windowed game with a title bar or a maximized browser.
-    #[test]
-    fn pin_engages_on_a_non_filling_window() {
-        let mut fake = FakeSystem::new();
-        two_monitors(&mut fake);
-        fake.set_foreground(Some(game_on_m1(100)));
-        fake.set_cursor(Point { x: 3000, y: 720 });
-        let mut brain = LockCore::new();
-        brain.start_picker(&mut fake);
-        brain.update(&mut fake);
-        brain.confirm_picker(&mut fake); // pin m2
-        brain.update(&mut fake); // engage on m2
+    // --- Pin mode is click-driven (user decision 2026-11-12, grill) ---
 
-        // A non-Game foreground window (browser-sized) while pinned: the pin
-        // engages the Lock on the pinned monitor — no fills-monitor
-        // requirement.
-        fake.set_foreground(Some(maximized_browser()));
-        let snap = brain.update(&mut fake);
-        assert!(
-            matches!(
-                snap.lock,
-                LockState::Engaged { monitor_id, .. } if monitor_id == "m2"
-            ),
-            "a non-Game foreground window engages while a monitor is pinned"
-        );
-        assert_eq!(
-            fake.effective_clip(),
-            Some(M2),
-            "the clip targets the pinned monitor"
-        );
-        assert_eq!(
-            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
-            Some("m2"),
-            "the pin is reported in the snapshot"
-        );
+    /// One mouse click: the button goes down for a tick, then up.
+    fn click(fake: &mut FakeSystem, brain: &mut LockCore, at: Point) -> LockSnapshot {
+        fake.set_cursor(at);
+        fake.set_mouse_down(true);
+        let snap = brain.update(fake);
+        fake.set_mouse_down(false);
+        snap
     }
 
-    /// Pin mode, the Escape hatch: the desktop background releases the Lock
-    /// (so the cursor is never trapped), and any window regaining focus
-    /// re-engages on the pinned monitor.
+    /// Pin m2 through the picker, with the pick click engaging at once. The
+    /// foreground and cursor are the caller's. Ends with the Lock's first
+    /// tick after the pick done and enough idle ticks that the click grace
+    /// has expired.
+    fn pin_m2(fake: &mut FakeSystem, brain: &mut LockCore) {
+        brain.start_picker(fake);
+        brain.update(fake);
+        brain.confirm_picker(fake);
+        for _ in 0..CLICK_GRACE_TICKS {
+            brain.update(fake);
+        }
+    }
+
+    const ON_M1: Point = Point { x: 960, y: 540 };
+    const ON_M2: Point = Point { x: 3000, y: 720 };
+
+    fn engaged_on(snap: &LockSnapshot, monitor: &str) -> bool {
+        matches!(&snap.lock, LockState::Engaged { monitor_id, .. } if monitor_id == monitor)
+    }
+
     #[test]
-    fn pin_releases_on_the_desktop_and_reengages_on_any_window() {
+    fn picking_a_monitor_engages_at_once_on_a_non_filling_window() {
         let mut fake = FakeSystem::new();
         two_monitors(&mut fake);
-        fake.set_foreground(Some(game_on_m1(100)));
-        fake.set_cursor(Point { x: 3000, y: 720 });
+        fake.set_foreground(Some(window(300, "Editor", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M2);
         let mut brain = LockCore::new();
         brain.start_picker(&mut fake);
         brain.update(&mut fake);
-        brain.confirm_picker(&mut fake); // pin m2
-        brain.update(&mut fake); // engage on m2
+        brain.confirm_picker(&mut fake);
+        let snap = brain.update(&mut fake);
+        assert!(engaged_on(&snap, "m2"), "the pick click engages: no fills-monitor requirement");
+        assert_eq!(fake.effective_clip(), Some(M2));
+    }
 
-        // The desktop background releases the Lock while pinned.
+    #[test]
+    fn picking_over_shell_ui_keeps_the_pin_suspended() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(None); // desktop / taskbar
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released), "shell UI never locks");
+        assert_eq!(snap.pinned.as_ref().map(|p| p.monitor_id.as_str()), Some("m2"));
+    }
+
+    #[test]
+    fn alt_tab_suspends_the_pin_and_focus_alone_never_relocks() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+        assert_eq!(fake.effective_clip(), Some(M2));
+
+        // The Alt+Tab switcher is shell UI: no real foreground window.
         fake.set_foreground(None);
         let snap = brain.update(&mut fake);
-        assert!(
-            matches!(snap.lock, LockState::Released),
-            "the desktop releases the Lock while pinned (the Escape hatch)"
-        );
-        assert_eq!(fake.effective_clip(), None, "no clip while released");
-        assert_eq!(
-            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
-            Some("m2"),
-            "the pin survives the release"
-        );
+        assert!(matches!(snap.lock, LockState::Released), "Alt+Tab suspends the lock");
+        assert_eq!(fake.effective_clip(), None, "the cursor is free to cross monitors");
 
-        // Any window regaining focus re-engages on the pinned monitor.
+        // The user lands back on the same window, then on another one: with
+        // no click the lock stays suspended, and the pin stays armed.
+        fake.set_foreground(Some(game_on_m1(100)));
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released), "focus alone does not re-lock");
         fake.set_foreground(Some(maximized_browser()));
         let snap = brain.update(&mut fake);
-        assert!(
-            matches!(
-                snap.lock,
-                LockState::Engaged { monitor_id, .. } if monitor_id == "m2"
-            ),
-            "a window regaining focus re-engages on the pinned monitor"
-        );
+        assert!(matches!(snap.lock, LockState::Released));
+        assert_eq!(snap.pinned.as_ref().map(|p| p.monitor_id.as_str()), Some("m2"));
     }
 
-    /// Pin mode: focus moving from one non-Game window to another does NOT
-    /// release — the Lock re-engages on the pinned monitor (that is what
-    /// "pin the mouse" means: the cursor stays on the pinned monitor).
     #[test]
-    fn pin_survives_focus_switch_between_non_game_windows() {
+    fn a_click_inside_the_pinned_monitor_re_engages_on_any_window() {
         let mut fake = FakeSystem::new();
         two_monitors(&mut fake);
         fake.set_foreground(Some(game_on_m1(100)));
-        fake.set_cursor(Point { x: 3000, y: 720 });
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+        fake.set_foreground(None);
+        brain.update(&mut fake); // suspended
+
+        // A non-filling window on the pinned monitor takes focus; the user
+        // clicks inside m2.
+        fake.set_foreground(Some(window(300, "Editor", 2000, 100, 800, 600)));
+        let snap = click(&mut fake, &mut brain, ON_M2);
+        assert!(engaged_on(&snap, "m2"), "a click inside the pinned monitor re-engages");
+        assert_eq!(fake.effective_clip(), Some(M2));
+    }
+
+    #[test]
+    fn a_click_on_shell_ui_inside_the_pinned_monitor_stays_suspended() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+        fake.set_foreground(None);
+        brain.update(&mut fake);
+
+        let snap = click(&mut fake, &mut brain, ON_M2); // e.g. the desktop / a taskbar
+        assert!(matches!(snap.lock, LockState::Released));
+        assert_eq!(
+            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
+            Some("m2"),
+            "the pin is kept"
+        );
+    }
+
+    #[test]
+    fn a_click_outside_the_pinned_monitor_drops_the_pin() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+        fake.set_foreground(None);
+        brain.update(&mut fake); // suspended
+
+        // The user clicks the (non-filling) Explorer window on m1.
+        fake.set_foreground(Some(maximized_browser()));
+        let snap = click(&mut fake, &mut brain, ON_M1);
+        assert!(snap.pinned.is_none(), "the pin is dropped: the user is never trapped");
+        assert!(matches!(snap.lock, LockState::Released), "auto: a non-filling window does not lock");
+        // And it stays that way: no later tick re-engages without a Game window.
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released));
+        assert!(snap.pinned.is_none(), "the pin stays dropped on later ticks");
+    }
+
+    #[test]
+    fn dropping_the_pin_lets_auto_lock_a_filling_window_in_the_same_click() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(window(300, "Editor", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+        fake.set_foreground(None);
+        brain.update(&mut fake); // suspended
+
+        fake.set_foreground(Some(game_on_m1(100))); // a borderless game on m1
+        let snap = click(&mut fake, &mut brain, ON_M1);
+        assert!(snap.pinned.is_none());
+        assert!(engaged_on(&snap, "m1"), "auto engages on the clicked Game window in that same tick");
+        assert_eq!(fake.effective_clip(), Some(M1));
+    }
+
+    #[test]
+    fn clicking_another_window_inside_the_pinned_monitor_keeps_the_lock() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(window(300, "A", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+
+        // Focus moves to B at the same time as the click inside m2.
+        fake.set_foreground(Some(window(301, "B", 3000, 100, 800, 600)));
+        let snap = click(&mut fake, &mut brain, ON_M2);
+        assert!(
+            matches!(&snap.lock, LockState::Engaged { window_title, .. } if window_title == "B"),
+            "the lock follows the clicked window on the pinned monitor"
+        );
+    }
+
+    #[test]
+    fn a_click_seen_before_the_focus_change_still_follows_the_clicked_window() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(window(300, "A", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+
+        // The poll sees the click first (focus still on A); focus moves to B
+        // a few ms later, in the next tick.
+        click(&mut fake, &mut brain, ON_M2);
+        fake.set_foreground(Some(window(301, "B", 3000, 100, 800, 600)));
+        let snap = brain.update(&mut fake);
+        assert!(
+            matches!(&snap.lock, LockState::Engaged { window_title, .. } if window_title == "B"),
+            "the click grace lets the lock follow the focus change"
+        );
+    }
+
+    #[test]
+    fn the_click_grace_does_not_outlive_the_alt_tab_switcher() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(window(300, "A", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        pin_m2(&mut fake, &mut brain);
+
+        click(&mut fake, &mut brain, ON_M2);
+        fake.set_foreground(None); // Alt+Tab right after the click
+        brain.update(&mut fake);
+        fake.set_foreground(Some(window(301, "B", 3000, 100, 800, 600)));
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released), "no click: stays suspended");
+    }
+
+    #[test]
+    fn a_button_held_across_the_end_of_the_picker_is_not_a_new_click() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(None); // shell UI: nothing to engage on
+        fake.set_cursor(ON_M2);
+        let mut brain = LockCore::new();
+        brain.start_picker(&mut fake);
+        fake.set_mouse_down(true); // the pick click, held
+        brain.update(&mut fake);
+        brain.confirm_picker(&mut fake);
+        for _ in 0..CLICK_GRACE_TICKS + 2 {
+            brain.update(&mut fake);
+        }
+        // Still held; a window on m1 takes focus. Held is not a new click, so
+        // nothing re-engages and the pin is not dropped.
+        fake.set_foreground(Some(maximized_browser()));
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released));
+        assert!(snap.pinned.is_some());
+    }
+
+    #[test]
+    fn back_to_auto_cancels_a_pending_pick_engage() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(window(300, "Editor", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M2);
         let mut brain = LockCore::new();
         brain.start_picker(&mut fake);
         brain.update(&mut fake);
-        brain.confirm_picker(&mut fake); // pin m2
-        brain.update(&mut fake); // engage on m2
-
-        // Focus moves from the Game to another (non-Game) window while
-        // pinned: the Lock stays on the pinned monitor.
-        fake.set_foreground(Some(window(300, "Editor", 500, 0, 800, 600)));
+        brain.confirm_picker(&mut fake);
+        brain.back_to_auto();
         let snap = brain.update(&mut fake);
-        assert!(
-            matches!(
-                snap.lock,
-                LockState::Engaged { monitor_id, window_title, .. }
-                    if monitor_id == "m2" && window_title == "Editor"
-            ),
-            "focus moving between windows re-engages on the pinned monitor"
-        );
-        assert_eq!(
-            fake.effective_clip(),
-            Some(M2),
-            "the clip stays on the pinned monitor"
-        );
+        assert!(snap.pinned.is_none());
+        assert!(matches!(snap.lock, LockState::Released));
+    }
+
+    // --- The clip released behind the Lock's back ---
+
+    #[test]
+    fn a_clip_released_behind_the_lock_is_re_applied_while_engaged() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(ON_M1);
+        let mut brain = LockCore::new();
+        let snap = brain.update(&mut fake);
+        assert!(engaged_on(&snap, "m1"));
+        assert_eq!(snap.clip_reasserts, 0, "nothing to re-apply while the clip holds");
+
+        fake.external_clip_clear(); // Windows or another app releases it
+        let snap = brain.update(&mut fake);
+        assert!(engaged_on(&snap, "m1"));
+        assert_eq!(fake.effective_clip(), Some(M1), "the clip is back in force");
+        assert_eq!(snap.clip_reasserts, 1);
+        let snap = brain.update(&mut fake);
+        assert_eq!(snap.clip_reasserts, 1, "no repeated re-apply once it holds");
+    }
+
+    #[test]
+    fn the_guard_puts_a_released_clip_back_between_ticks() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(ON_M1);
+        let mut brain = LockCore::new();
+        brain.update(&mut fake);
+
+        fake.external_clip_clear();
+        brain.guard_clip(&mut fake); // no full tick needed
+        assert_eq!(fake.effective_clip(), Some(M1));
+        let snap = brain.update(&mut fake);
+        assert_eq!(snap.clip_reasserts, 1);
+        assert!(snap.foreign_clip.is_some(), "the foreign clip is recorded for the window");
+    }
+
+    #[test]
+    fn a_released_lock_never_re_applies_a_clip() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(None);
+        let mut brain = LockCore::new();
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released));
+        assert!(fake.clip_sets().is_empty());
+        assert_eq!(snap.clip_reasserts, 0);
+    }
+
+    // --- Auto mode after a focus loss (no pin) ---
+
+    #[test]
+    fn auto_alt_tab_to_a_non_filling_window_stays_released_until_the_game_is_focused() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(ON_M1);
+        let mut brain = LockCore::new();
+        let snap = brain.update(&mut fake);
+        assert!(engaged_on(&snap, "m1"));
+
+        fake.set_foreground(None); // the Alt+Tab switcher
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released));
+
+        // Explorer (does not fill the monitor), even clicked: no lock.
+        fake.set_foreground(Some(maximized_browser()));
+        let snap = click(&mut fake, &mut brain, ON_M1);
+        assert!(matches!(snap.lock, LockState::Released));
+
+        // The Game regains focus: re-lock with no click needed.
+        fake.set_foreground(Some(game_on_m1(100)));
+        let snap = brain.update(&mut fake);
+        assert!(engaged_on(&snap, "m1"));
+    }
+
+    #[test]
+    fn auto_never_locks_a_filling_window_that_is_not_the_foreground() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        // A borderless game fills m1 but another window has the focus.
+        fake.set_foreground(Some(window(300, "Chat", 2000, 100, 800, 600)));
+        fake.set_cursor(ON_M1);
+        let mut brain = LockCore::new();
+        let snap = brain.update(&mut fake);
+        assert!(matches!(snap.lock, LockState::Released));
     }
 }

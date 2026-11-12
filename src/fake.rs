@@ -23,6 +23,9 @@ pub struct FakeSystem {
     monitors: Vec<MonitorInfo>,
     foreground: Option<WindowInfo>,
     cursor: Point,
+    mouse_down: bool,
+    /// The clip Windows would currently enforce (None = free).
+    clip: Option<Rect>,
     /// The brain's actions through the seam, in the order performed.
     pub actions: Vec<Action>,
 }
@@ -44,6 +47,17 @@ impl FakeSystem {
 
     pub fn set_cursor(&mut self, cursor: Point) {
         self.cursor = cursor;
+    }
+
+    /// Something other than the brain (Windows, another app) releases the
+    /// clip: no action is recorded.
+    pub fn external_clip_clear(&mut self) {
+        self.clip = None;
+    }
+
+    /// A mouse button is down (held) from now on, until released.
+    pub fn set_mouse_down(&mut self, down: bool) {
+        self.mouse_down = down;
     }
 
     /// The set-clip actions, in order.
@@ -105,11 +119,21 @@ impl SystemAccess for FakeSystem {
         self.cursor
     }
 
+    fn mouse_button_down(&self) -> bool {
+        self.mouse_down
+    }
+
+    fn cursor_clip(&self) -> Rect {
+        self.clip.unwrap_or(Rect { x: 0, y: 0, width: 100_000, height: 100_000 })
+    }
+
     fn set_cursor_clip(&mut self, rect: Rect) {
+        self.clip = Some(rect);
         self.actions.push(Action::ClipSet(rect));
     }
 
     fn clear_cursor_clip(&mut self) {
+        self.clip = None;
         self.actions.push(Action::ClipClear);
     }
 

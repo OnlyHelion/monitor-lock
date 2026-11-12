@@ -21,11 +21,11 @@ The activation rule: the Lock is engaged only while the game window has focus, a
 _Avoid_: always-on, manual lock, sticky lock
 
 **Escape hatch**:
-The means by which the user takes the cursor off the locked monitor: focus loss (e.g. Alt+Tab). There is no temporary-release hotkey.
+The means by which the user takes the cursor off the locked monitor: focus loss (e.g. Alt+Tab), which suspends the Lock. There is no temporary-release hotkey.
 _Avoid_: unlock, release key, pause
 
 **Monitor override**:
-Pinning the Lock to a user-chosen monitor instead of following the game window's monitor.
+Pinning the Lock to a user-chosen monitor instead of following the game window's monitor. A pin drops the fills-monitor requirement and is click-driven: any focus change suspends the Lock (the pin stays armed); a click inside the pinned monitor re-engages it on any real window; a click outside it while suspended drops the pin and returns to auto. Shell UI (desktop, taskbar, Start, the Alt+Tab switcher) never locks.
 _Avoid_: manual monitor, fixed monitor
 
 **Monitor picker**:

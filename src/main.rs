@@ -8,6 +8,11 @@
 //! actions. The thin layer has no unit tests; it is verified by the user's
 //! in-game hand-check (ticket #5).
 
+// Release builds are a Windows GUI app: no console window. (Debug builds keep
+// the console for `cargo run`.) A panic then has nowhere to print, so main
+// installs a hook that writes it to `monitor-lock-panic.log` next to the exe.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 #[cfg(test)]
 mod fake;
 mod core;
@@ -23,9 +28,32 @@ mod app;
 
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // No console in release builds: write panics to a log file beside the
+    // exe (falls back to the temp dir) so the next report has a trace.
+    std::panic::set_hook(Box::new(|info| {
+        let dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(std::env::temp_dir);
+        let line = format!("{:?}: {}
+", std::time::SystemTime::now(), info);
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("monitor-lock-panic.log"))
+        {
+            let _ = f.write_all(line.as_bytes());
+        }
+        eprintln!("{line}");
+        // A crashed thread must never leave the cursor trapped.
+        win32::emergency_release();
+    }));
+
     // Per-monitor v2 DPI awareness: first statement, before any window or
     // tray creation (spec; user story 21).
     win32::set_per_monitor_dpi_awareness();
+    win32::start_mouse_guard();
 
     // The tray icon is created on the main thread and owned by the eframe
     // app: the tray's message window is pumped by the UI thread, so the
@@ -116,6 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 click_down = false;
             }
 
+            // The clip is re-applied once per tick (in `update`). The mouse
+            // guard (win32.rs) is what keeps the cursor in when another
+            // program resets the clip between ticks, so there is no need to
+            // fight that program faster than this.
             std::thread::sleep(std::time::Duration::from_millis(if snap.picking {
                 50
             } else {
@@ -127,20 +159,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Monitor Lock")
-            .with_inner_size([380.0, 340.0])
-            .with_visible(false), // on-demand window: starts hidden
+            .with_inner_size([400.0, 210.0]),
         ..Default::default()
     };
     eframe::run_native(
         "Monitor Lock",
         options,
-        Box::new(move |_cc| Ok(Box::new(app::MonitorLockApp {
+        Box::new(move |cc| {
+            // Tray events are handled as they arrive, so the tray keeps
+            // working while the window is hidden.
+            app::install_tray_handlers(cc.egui_ctx.clone(), cmd_tx.clone());
+            Ok(Box::new(app::MonitorLockApp {
             shared,
             tray,
             icons,
             state_rx,
             cmd_tx,
-        }) as _)),
+        }) as _)
+        }),
     )?;
     Ok(())
 }
