@@ -10,6 +10,7 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::core;
+use crate::seam::Rect;
 use crate::win32;
 
 /// The two pre-built tray icons: one per Lock state, swapped on state change
@@ -103,13 +104,11 @@ impl eframe::App for MonitorLockApp {
             ui.separator();
 
             ui.label(format!("Foreground window: {}", foreground_label(&snap)));
+            ui.label(format!("Game window: {}", game_window_label(&snap)));
 
             ui.label(format!("Monitors: {}", snap.monitors.len()));
             for m in &snap.monitors {
-                ui.label(format!(
-                    "  {}  ({}, {}) {}x{}",
-                    m.id, m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height
-                ));
+                ui.label(format!("  {}", format_monitor(&m.id, &m.bounds)));
             }
 
             if snap.picking {
@@ -143,21 +142,13 @@ impl eframe::App for MonitorLockApp {
             // too — a pin outlives a focus loss.
             if let Some(pinned) = &snap.pinned {
                 ui.label(format!(
-                    "Target monitor (pinned): {}  ({}, {}) {}x{}",
-                    pinned.monitor_id,
-                    pinned.monitor_bounds.x,
-                    pinned.monitor_bounds.y,
-                    pinned.monitor_bounds.width,
-                    pinned.monitor_bounds.height
+                    "Target monitor (pinned): {}",
+                    format_monitor(&pinned.monitor_id, &pinned.monitor_bounds)
                 ));
             } else if let Some(game) = &snap.game_window {
                 ui.label(format!(
-                    "Target monitor (auto): {}  ({}, {}) {}x{}",
-                    game.game_monitor_id,
-                    game.game_monitor_bounds.x,
-                    game.game_monitor_bounds.y,
-                    game.game_monitor_bounds.width,
-                    game.game_monitor_bounds.height
+                    "Target monitor (auto): {}",
+                    format_monitor(&game.game_monitor_id, &game.game_monitor_bounds)
                 ));
             } else {
                 ui.label("Target monitor: — (no game window)");
@@ -175,11 +166,7 @@ impl eframe::App for MonitorLockApp {
                     let _ = self.cmd_tx.send(UiCommand::BackToAuto);
                 }
                 if exit.clicked() {
-                    // The cursor clip is global Windows state that survives
-                    // process death (user story 20), so clear it before
-                    // exiting.
-                    win32::clear_clip();
-                    std::process::exit(0);
+                    exit_app();
                 }
             });
         });
@@ -187,6 +174,13 @@ impl eframe::App for MonitorLockApp {
         // Live-updates: repaint on the poll cadence even without input.
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
+}
+
+/// Exit: the cursor clip is global Windows state that survives process
+/// death (user story 20), so clear it before exiting.
+fn exit_app() -> ! {
+    win32::clear_clip();
+    std::process::exit(0);
 }
 
 /// The foreground window line: title, or a fallback for the desktop and for
@@ -197,6 +191,21 @@ fn foreground_label(snap: &core::LockSnapshot) -> String {
         Some(w) if w.title.is_empty() => "(window with no title)".to_string(),
         Some(w) => w.title.clone(),
     }
+}
+
+/// The detected Game window line (user story 15): the Game window's title,
+/// or "none" when the foreground window is not a Game window.
+fn game_window_label(snap: &core::LockSnapshot) -> String {
+    match &snap.game_window {
+        None => "none".to_string(),
+        Some(g) if g.title.is_empty() => "(window with no title)".to_string(),
+        Some(g) => g.title.clone(),
+    }
+}
+
+/// One monitor's id and FULL bounds (x, y, w, h) for the on-demand window.
+fn format_monitor(id: &str, bounds: &Rect) -> String {
+    format!("{}  ({}, {}) {}x{}", id, bounds.x, bounds.y, bounds.width, bounds.height)
 }
 
 /// Drain tray events on the UI thread: left-click opens the on-demand window;
@@ -222,10 +231,7 @@ fn drain_tray_events(ctx: &egui::Context, cmd_tx: &mpsc::Sender<UiCommand>) {
                 let _ = cmd_tx.send(UiCommand::BackToAuto);
             }
             "exit" => {
-                // The cursor clip is global Windows state that survives
-                // process death (user story 20), so clear it before exiting.
-                win32::clear_clip();
-                std::process::exit(0);
+                exit_app();
             }
             _ => {}
         }
