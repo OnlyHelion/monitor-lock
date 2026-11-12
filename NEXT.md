@@ -19,7 +19,7 @@
 
 - User 12 Nov: mouse guard works in Star Citizen + Magpie; the 'Clip re-applied' N keeps growing (another program resets the clip). Not harmful now; code changed (66/66): re-apply back to once per 100 ms tick (the 10 ms slices removed), GUI line reworded. Release exe rebuilt 13:03 with this change; not yet run.
 
-- RELEASED 12 Nov 2026: v0.1.0 is live (https://github.com/OnlyHelion/monitor-lock/releases/tag/v0.1.0), built by the `Release` workflow when a `v*` tag is pushed; PR #6 merged into master. Assets: monitor-lock.exe (static CRT) + .sha256; downloaded copy verified (checksum matches, starts, no panic log). Next release: bump nothing, push a new tag `vX.Y.Z` on master. GUI trimmed (collapsed Details), `ClipCursor(None)` replaces the UnClipCursor shim, README + GLOSSARY updated, clippy/fmt clean.
+- RELEASED 12 Nov 2026: v0.1.0 is live (https://github.com/OnlyHelion/monitor-lock/releases/tag/v0.1.0), built by the `Release` workflow when a `v*` tag is pushed; PR #6 merged into master. Tracker aligned: #1-#5 closed with verdict comments; open follow-ups live in #7. Assets: monitor-lock.exe (static CRT) + .sha256; downloaded copy verified (checksum matches, starts, no panic log). Next release: bump nothing, push a new tag `vX.Y.Z` on master. GUI trimmed (collapsed Details), `ClipCursor(None)` replaces the UnClipCursor shim, README + GLOSSARY updated, clippy/fmt clean.
 
 ## Next step
 1. User hand-check on the 12:05 exe: pin a monitor, Alt+Tab (lock must free the cursor; the Alt+Tab class is UNVERIFIED on this Win11 build: if it still holds, read the foreground class during Alt+Tab, add it to `is_shell_ui_class`); click inside the pinned monitor re-locks; click on another monitor drops the pin; auto with a borderless game.
