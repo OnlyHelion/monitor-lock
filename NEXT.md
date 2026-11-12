@@ -1,17 +1,34 @@
 # NEXT.md — Monitor Lock
 
 ## State now
-- Project: K:\monitor-lock (git repo). Setup complete + committed: AGENTS.md (## Agent skills block) + docs/agents/{issue-tracker,triage-labels,domain}.md.
-- Tracker: **GitHub** (gh CLI). Repo NOT pushed yet (no remote) → after first push: `gh label create` the five labels (noted in issue-tracker.md).
-- Flow: main flow. Grilling done, /setup-matt-pocock-skills done. Back in /to-spec — seam confirmation is the only remaining blocker.
-- GLOSSARY.md: 7 terms (Lock, Game monitor, Game window, Auto-follow focus, Escape hatch, Monitor override, Monitor picker). No ADRs.
+- Project: K:\monitor-lock (git; public github.com/OnlyHelion/monitor-lock). Branch `implement/spec-1-monitor-lock`.
+- #5 hand-check FAILED on the 10:10 exe (user 09:43/09:45: nothing activates; ~09:5x: UnClipCursor panic in log; 10:1x: over-engagement on browser + desktop background). THREE root causes, ALL fixed + verified (real-seam tests red→green, `cargo test` 49/49):
+  1. `monitors()` passed the Vec's BUFFER to the `EnumDisplayMonitors` callback → monitor list always empty (commit bf3cacf).
+  2. `UnClipCursor` absent by name from this machine's user32.dll → startup panic killed the poll thread; `release_clip()` now falls back to ClipCursor(whole virtual screen) (commit dfa7e32).
+  3. Over-engagement (DIAGNOSIS-3): desktop = Progman + all its children span the whole virtual screen → `is_desktop()` filter (GetAncestor(GA_ROOT) == shell) in win32.rs; a real maximized Edge measures 97.22% of M1 → FILL_THRESHOLD 0.97→0.98 in core.rs (commit 248f80d).
+- SPEC CHANGE (user 12 Nov, grill): pin mode is click-driven, replacing PIN-FORCE (commit 5c09995). Rules in the `core.rs` module doc. Any focus change from the locked window suspends the lock (pin stays armed); focus alone never re-locks in pin mode; a click INSIDE the pinned monitor re-engages on any real window; a click OUTSIDE while suspended drops the pin and auto decides in the same tick; the pick click engages at once. Shell UI (desktop, taskbar, Start, Alt+Tab switcher; class list `is_shell_ui_class` in win32.rs) = "no real foreground window". Auto mode: focused filling window re-locks with no click. Clicks on the app's own windows are ignored.
+- UNCOMMITTED, UNPUSHED: core.rs, seam.rs (`mouse_button_down`), fake.rs, win32.rs, app.rs (suspended-pin text), this file. 60/60 tests; release exe 12:05 `targetelease\monitor-lock.exe`. No exe run, no in-game test yet.
 
-## In flight
-- /to-spec step 2 seam question awaiting user yes/no: pure LockCore (detection + lock/picker state machine + geometry) behind ONE SystemAccess seam (in: monitors/foreground/cursor; out: set_clip/move_cursor); unit-tested with a fake system; thin Win32/UI layer verified by in-game hand-check.
+- UNVERIFIED FIX (user 12 Nov: GUI said 'Lock: engaged' while the cursor was free): hypothesis = Windows or another app released the clip behind the Lock's back. Brain now compares `SystemAccess::cursor_clip()` with its target every tick while engaged and re-applies; window shows 'Clip re-applied N time(s)' when it happens (confirms the hypothesis). 62/62 tests. Release exe rebuilt 12:19 (with this fix); not yet run by the user.
+
+- BLEED REPORT (user 12 Nov, pinned, browser focused): the cursor escaped the pinned monitor ONLY along the horizontal band where the Monitor Lock GUI window sat (and freely when the GUI straddled the seam); 'Clip re-applied' N rose while the GUI said engaged; GUI not focused. Raw ClipCursor holds under 4000 px jumps (tested), so something releases the clip near the GUI window; root cause UNKNOWN (winit refresh_os_cursor only clips when our window is active, so not it if truly unfocused). Mitigation built (64/64 tests): no clear-first in set_cursor_clip (ClipCursor replaces; the clear opened a leak window), `guard_clip` every 10 ms in main.rs, GUI shows the last foreign clip rect. Next: user re-test; if it still bleeds near the GUI, read 'last: x,y WxH' (0,0 4480x1440 = cleared by someone).
+
+- BLEED CAUSE (user 12 Nov, 'N goes up the second the mouse hovers the GUI'): hovering the Monitor Lock window makes the window toolkit change the clip (suspected winit `refresh_os_cursor`, not proven). Workaround built 12:45: closing the window (X) now hides it to the tray instead of quitting (CancelClose + Win32 SW_HIDE, `win32::hide_main_window`); tray left-click / Open re-shows it via Win32 (`show_main_window`); tray menu runs as event handlers (`app::install_tray_handlers`) so it works while hidden. Tested by script: close keeps the process alive, tray click reopens, repeatable. Window still starts visible. Real fix for hover (not done): stop the toolkit touching the clip while the window is visible.
+
+- LEAK IN STAR CITIZEN + MAGPIE (user 12 Nov): GUI showed 'Clip re-applied 2138 time(s) (last: 0,0 4480x1440)': another program (game or Magpie) resets the clip to the whole virtual screen over and over, and the cursor leaks between our re-applies. Fix built 12:5x (66/66 tests): a low-level mouse hook (`win32::start_mouse_guard`, armed/disarmed by set/clear clip) clamps every mouse move outside the target monitor back inside, whatever the clip is. Real-seam test sweeps the real cursor with the clip released: fails without the hook (cursor reaches x=4479), passes with it. UNVERIFIED in the game: Magpie also moves the cursor and may fight the clamp. Release build has no console; panics go to `monitor-lock-panic.log` beside the exe and also release the guard.
+
+- User 12 Nov: mouse guard works in Star Citizen + Magpie; the 'Clip re-applied' N keeps growing (another program resets the clip). Not harmful now; code changed (66/66): re-apply back to once per 100 ms tick (the 10 ms slices removed), GUI line reworded. Release exe rebuilt 13:03 with this change; not yet run.
+
+- CLEANUP DONE, BUILT 13:14 (smoke-tested: starts, window shown, no panic log) (user 12 Nov: 'ready for release after cleanup?'): GUI trimmed to state/target/pin/buttons with a collapsed 'Details' (foreground, game window, monitors, clip-reset count); window 400x210; `UnClipCursor` shim replaced by `ClipCursor(None)`; counter saturates; clippy clean; tests moved to file end in win32.rs; GLOSSARY updated for click-driven pins. 66/66. Committed locally (features, README, fmt, crt-static + README Download section); NOT pushed; exe links the C runtime statically (`.cargo/config.toml`), checked: no VCRUNTIME import; tag/release only on the user's word.
 
 ## Next step
-- User confirms seam → write the spec (to-spec template) → publish via `gh issue create` with `ready-for-agent` (needs the repo on GitHub first; if not pushed yet, ask user to push or hold the spec in a file) → /implement (single session, /tdd slices: geometry → detection → lock state machine → picker → tray/window) → /code-review.
+1. User hand-check on the 12:05 exe: pin a monitor, Alt+Tab (lock must free the cursor; the Alt+Tab class is UNVERIFIED on this Win11 build: if it still holds, read the foreground class during Alt+Tab, add it to `is_shell_ui_class`); click inside the pinned monitor re-locks; click on another monitor drops the pin; auto with a borderless game.
+2. Then commit + push, post the rules on issue #1 (comment posted on #1, 12 Nov), close #5 on user confirmation.
+3. Known limit: opening the tray menu by clicking the tray icon counts as a click outside the pinned monitor (if the tray is on another monitor) and drops the pin.
 
-## Open assumptions (UNVERIFIED)
-- "borderless/windowed" = windowed-fullscreen (fills the monitor, no border).
-- GitHub repo owner/name unknown (not created/pushed yet).
+## Watch items
+- A click on the on-demand window during the picker also counts as the global pin click; border fixed at 5 physical px.
+- No PC shutdown while the user is testing (the 01:22 permission is superseded).
+- UNTESTED-VISUAL (still): tray icon rendering, window display (now includes the pin-mode hint line), overlay ring, picker feel, real clip, pin-force in real use — user validating on the new exe.
+- If the user is testing, the exe is locked: ask them to Exit before any `cargo build --release`.
+- The tree is NOT `cargo fmt`-clean (app.rs/core.rs/main.rs/overlay.rs/seam.rs reformat under the current rustfmt; left as-is — don't drag into fix commits).

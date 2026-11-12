@@ -1,0 +1,42 @@
+name: Release
+
+# Pushing a version tag (for example v0.1.1) builds the exe on GitHub's
+# Windows runner and publishes a release with monitor-lock.exe attached.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tests that touch the real desktop (monitors, cursor, clip) need a
+      # logged-in session, which the runner does not have.
+      - name: Test
+        run: cargo test -- --skip real_system
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target/release/monitor-lock.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  monitor-lock.exe" | Out-File -Encoding ascii target/release/monitor-lock.exe.sha256
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            target/release/monitor-lock.exe `
+            target/release/monitor-lock.exe.sha256 `
+            --title "Monitor Lock ${{ github.ref_name }}" `
+            --generate-notes
