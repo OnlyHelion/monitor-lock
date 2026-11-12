@@ -146,21 +146,19 @@ impl LockCore {
         let monitors = sys.monitors();
         let foreground = sys.foreground_window();
         let game_window = foreground.as_ref().and_then(|window| {
-            filled_monitor(&monitors, window, self.threshold).map(|(id, bounds)| DetectedGameWindow {
-                identity: window.identity,
-                title: window.title.clone(),
-                game_monitor_id: id,
-                game_monitor_bounds: bounds,
-            })
+            filled_monitor(&monitors, window, self.threshold)
+                .map(|game_monitor| DetectedGameWindow {
+                    identity: window.identity,
+                    title: window.title.clone(),
+                    game_monitor_id: game_monitor.monitor_id,
+                    game_monitor_bounds: game_monitor.monitor_bounds,
+                })
         });
 
         // The Monitor override, resolved against this tick's monitors: the
         // pin is void when the pinned monitor no longer exists (the target
         // falls back to the Game monitor).
-        let pinned = self.resolve_pin(&monitors).map(|(id, bounds)| MonitorOverride {
-            monitor_id: id,
-            monitor_bounds: bounds,
-        });
+        let pinned = self.resolve_pin(&monitors);
 
         if self.picking {
             // The Monitor picker is active: the cursor is free on all
@@ -191,12 +189,14 @@ impl LockCore {
         // The Lock's target: the pinned monitor when a Monitor override is
         // active, else the Game monitor.
         let target = pinned
-            .as_ref()
-            .map(|p| (p.monitor_id.clone(), p.monitor_bounds))
+            .clone()
             .or_else(|| {
                 game_window
                     .as_ref()
-                    .map(|g| (g.game_monitor_id.clone(), g.game_monitor_bounds))
+                    .map(|g| MonitorTarget {
+                        monitor_id: g.game_monitor_id.clone(),
+                        monitor_bounds: g.game_monitor_bounds,
+                    })
             });
 
         // The Auto-follow focus state machine.
@@ -206,21 +206,22 @@ impl LockCore {
             // the end of the Monitor picker), or focus moving directly from
             // one Game window to another (a focus loss from the first).
             (Some(game), lock) if Self::engaged_identity(lock) != Some(game.identity) => {
-                let (target_id, target_bounds) = target
-                    .clone()
-                    .unwrap_or_else(|| (game.game_monitor_id.clone(), game.game_monitor_bounds));
+                let target = target.clone().unwrap_or_else(|| MonitorTarget {
+                    monitor_id: game.game_monitor_id.clone(),
+                    monitor_bounds: game.game_monitor_bounds,
+                });
                 if matches!(lock, LockState::Engaged { .. }) {
                     // The Lock first releases the Game window it was
                     // following, then re-engages the new one.
                     sys.clear_cursor_clip();
                 }
-                sys.set_cursor_clip(target_bounds);
-                self.recenter_if_outside(sys, target_bounds);
+                sys.set_cursor_clip(target.monitor_bounds);
+                Self::recenter_if_outside(sys, target.monitor_bounds);
                 self.lock = LockState::Engaged {
                     window_identity: game.identity,
                     window_title: game.title.clone(),
-                    monitor_id: target_id,
-                    monitor_bounds: target_bounds,
+                    monitor_id: target.monitor_id,
+                    monitor_bounds: target.monitor_bounds,
                 };
             }
             // TARGET CHANGE: the engaged Game window still has focus but the
@@ -231,18 +232,18 @@ impl LockCore {
             (Some(game), LockState::Engaged { monitor_bounds, .. })
                 if target
                     .as_ref()
-                    .map(|(_, t)| *monitor_bounds != *t)
+                    .map(|t| *monitor_bounds != t.monitor_bounds)
                     .unwrap_or(false) =>
             {
-                let (target_id, target_bounds) =
+                let target =
                     target.clone().expect("the target is set while a Game window is foreground");
-                sys.set_cursor_clip(target_bounds);
-                self.recenter_if_outside(sys, target_bounds);
+                sys.set_cursor_clip(target.monitor_bounds);
+                Self::recenter_if_outside(sys, target.monitor_bounds);
                 self.lock = LockState::Engaged {
                     window_identity: game.identity,
                     window_title: game.title.clone(),
-                    monitor_id: target_id,
-                    monitor_bounds: target_bounds,
+                    monitor_id: target.monitor_id,
+                    monitor_bounds: target.monitor_bounds,
                 };
             }
             // RELEASE: the foreground is no longer a Game window (another
@@ -274,10 +275,13 @@ impl LockCore {
     /// The Monitor override, resolved against the current tick's monitors:
     /// the pinned monitor's current (id, bounds), or None when there is no
     /// pin — clearing it when the pinned monitor no longer exists.
-    fn resolve_pin(&mut self, monitors: &[MonitorInfo]) -> Option<(String, Rect)> {
+    fn resolve_pin(&mut self, monitors: &[MonitorInfo]) -> Option<MonitorTarget> {
         let id = self.pin.as_deref()?;
         match monitors.iter().find(|m| m.id == id) {
-            Some(m) => Some((m.id.clone(), m.bounds)),
+            Some(m) => Some(MonitorTarget {
+                monitor_id: m.id.clone(),
+                monitor_bounds: m.bounds,
+            }),
             None => {
                 self.pin = None; // the pinned monitor is gone: the override is void
                 None
@@ -298,7 +302,8 @@ impl LockCore {
     /// Re-center on engage: if the cursor is outside the target monitor's
     /// bounds at this moment, move it to the center of the target monitor's
     /// FULL bounds. Virtual-screen math: negative coordinates included.
-    fn recenter_if_outside(&self, sys: &mut dyn SystemAccess, target: Rect) {
+    /// Associated function: it reads no brain state.
+    fn recenter_if_outside(sys: &mut dyn SystemAccess, target: Rect) {
         let cursor = sys.cursor_position();
         if !target.contains(cursor) {
             sys.move_cursor(target.center());
@@ -346,7 +351,7 @@ pub struct LockSnapshot {
     pub lock: LockState,
     /// The active Monitor override (a pinned monitor), if any — set even
     /// while the Lock is released (the pin outlives a focus loss).
-    pub pinned: Option<MonitorOverride>,
+    pub pinned: Option<MonitorTarget>,
     /// The Monitor picker is active: the cursor is free on all monitors, the
     /// monitor under the cursor is outlined, a click pins it, Esc cancels.
     pub picking: bool,
@@ -355,9 +360,14 @@ pub struct LockSnapshot {
     pub picker_hover: Option<MonitorInfo>,
 }
 
-/// The active Monitor override: a pinned monitor and its current FULL bounds.
+/// The Lock's target monitor: a monitor's id and its current FULL bounds —
+/// the (id, bounds) clump the Lock clips the cursor to.
+///
+/// The target is the pinned monitor while a Monitor override is active, else
+/// the Game monitor. Named for the target rather than the override, because
+/// the auto (non-pinned) target is not a Monitor override (glossary).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MonitorOverride {
+pub struct MonitorTarget {
     pub monitor_id: String,
     pub monitor_bounds: Rect,
 }
@@ -372,7 +382,8 @@ pub struct DetectedGameWindow {
 }
 
 /// The fills-monitor rule: does `window` cover at least `threshold` of ONE
-/// monitor's FULL bounds? Returns the Game monitor's (id, bounds), or None.
+/// monitor's FULL bounds? Returns the Game monitor (id + FULL bounds), or
+/// None.
 ///
 /// A window slightly larger than its monitor still fills it (the intersection
 /// is the whole monitor). A window straddling two monitors fills whichever of
@@ -382,8 +393,8 @@ pub fn filled_monitor(
     monitors: &[MonitorInfo],
     window: &WindowInfo,
     threshold: f64,
-) -> Option<(String, Rect)> {
-    let mut best: Option<(f64, String, Rect)> = None;
+) -> Option<MonitorTarget> {
+    let mut best: Option<(f64, MonitorTarget)> = None;
     for monitor in monitors {
         let monitor_area = monitor.bounds.area();
         if monitor_area == 0 {
@@ -396,16 +407,18 @@ pub fn filled_monitor(
             .unwrap_or(0.0);
         let fraction = covered / monitor_area as f64;
         if fraction >= threshold
-            && best.as_ref().map(|(f, _, _)| fraction > *f).unwrap_or(true)
+            && best.as_ref().map(|(f, _)| fraction > *f).unwrap_or(true)
         {
             best = Some((
                 fraction,
-                monitor.id.clone(),
-                monitor.bounds,
+                MonitorTarget {
+                    monitor_id: monitor.id.clone(),
+                    monitor_bounds: monitor.bounds,
+                },
             ));
         }
     }
-    best.map(|(_, id, bounds)| (id, bounds))
+    best.map(|(_, monitor)| monitor)
 }
 
 #[cfg(test)]
