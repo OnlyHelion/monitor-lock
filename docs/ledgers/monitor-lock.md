@@ -6,6 +6,7 @@
 - (2) ROOT CAUSE (read in source): egui-winit 0.37 maps ViewportCommand::Icon to winit 0.30 `set_window_icon`, which on Windows sets ONLY ICON_SMALL (winit platform_impl/windows/window.rs:887); the taskbar/Alt+Tab use ICON_BIG, so they kept the startup icon. FIX: `win32::set_main_window_icon(engaged)` sends WM_SETICON for ICON_SMALL (SM_CXSMICON) and ICON_BIG (SM_CXICON) with HICONs made by CreateIcon from icon::rgba (cached per state for the process lifetime); app.rs calls it on each state change instead of the viewport command. find_main_window() factored out of set_main_window_visible. New test win32::tests::real_system_creates_window_icons_for_both_states.
 - Verified: cargo test 69/69, clippy clean, release build. NOT verified at runtime (the user's Downloads\monitor-lock.exe was running; no second instance started).
 - user: "Release v0.1.3" (before their runtime hand-check) → Cargo.toml 0.1.3, cargo test 69/69, commit f58312b pushed, tag v0.1.3 pushed → Release run 43233242369 completed success; GitHub release v0.1.3 published 2026-11-12 15:09 with monitor-lock.exe + .sha256 (gh release view).
+- 2026-11-12 — user hand-check of v0.1.3: "its good" → taskbar icon swap CONFIRMED by the user.
 
 ## v0.1.2 — monitor icon (2026-11-12 14:3x–15:0x)
 - 2026-11-12 — user confirmed v0.1.1's exe shows the amber icon, but the taskbar showed a white rounded-square icon while the window is open → it is eframe's DEFAULT window icon (the egui logo): main.rs's ViewportBuilder set no icon, and a runtime window icon overrides the exe resource in the taskbar/Alt+Tab.
