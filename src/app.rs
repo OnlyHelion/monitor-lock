@@ -145,6 +145,9 @@ impl eframe::App for MonitorLockApp {
                     "Target monitor (pinned): {}",
                     format_monitor(&pinned.monitor_id, &pinned.monitor_bounds)
                 ));
+                // Pin mode engages on ANY focused window (no fills-monitor
+                // requirement); the desktop is the release.
+                ui.label("Pinned: engages while any window has focus — click the desktop or Back to auto to release");
             } else if let Some(game) = &snap.game_window {
                 ui.label(format!(
                     "Target monitor (auto): {}",

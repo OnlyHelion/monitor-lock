@@ -16,8 +16,14 @@
 //! monitor. While released, no clip is set.
 //!
 //! The Monitor override: pinning a monitor (via the Monitor picker) changes
-//! the Lock's target from the Game monitor to the pinned monitor; the
-//! activation rule (a Game window is foreground) is UNCHANGED. Back to auto
+//! the Lock's target from the Game monitor to the pinned monitor AND drops
+//! the fills-monitor requirement: while a pin is active, the Lock engages on
+//! the pinned monitor whenever a REAL (non-desktop) window is foreground —
+//! a windowed game with a title bar, or any window, keeps the cursor on the
+//! pinned monitor (the "pin as backup", user decision 2026-11-12). The
+//! desktop background is the release (the Escape hatch in pin mode); any
+//! window regaining focus re-engages on the pinned monitor. Without a pin,
+//! only a fills-monitor Game window activates the Lock. Back to auto
 //! restores following the Game monitor. No persistence: a pin lasts only for
 //! the current run.
 //!
@@ -43,7 +49,9 @@ use crate::seam::{MonitorInfo, Rect, SystemAccess, WindowInfo};
 /// on both sides. The in-game hand-check (ticket #5) is the arbiter if a
 /// "borderless maximized" game covering only the work area must engage
 /// instead: it is geometrically indistinguishable from a maximized browser
-/// and would need a lower value.
+/// and would need a lower value. Such a game can still be locked via the
+/// Monitor override (pin), which engages without the fills-monitor
+/// requirement — this constant governs AUTO engagement only.
 pub const FILL_THRESHOLD: f64 = 0.98;
 
 /// The brain. Owns the Lock state (the Auto-follow focus state machine) and
@@ -189,25 +197,45 @@ impl LockCore {
             };
         }
 
-        // The Lock's target: the pinned monitor when a Monitor override is
-        // active, else the Game monitor.
-        let target = pinned
-            .clone()
-            .or_else(|| {
-                game_window
+        // The Lock's target and its activation window. Without a pin: the
+        // target is the Game monitor and only a fills-monitor Game window
+        // activates the Lock (the Auto-follow focus rule). With a pin
+        // (Monitor override): the target is the pinned monitor and ANY real
+        // (non-desktop) foreground window activates it — no fills-monitor
+        // requirement (the "pin as backup": a windowed game with a title bar
+        // keeps the cursor on the pinned monitor; user decision 2026-11-12).
+        // The desktop background is the release in pin mode (the Escape
+        // hatch); another window does not release — it re-engages on the
+        // pinned monitor.
+        let (activation_window, target) = match (&pinned, &game_window) {
+            (Some(pinned_target), _) => (
+                foreground
                     .as_ref()
-                    .map(|g| MonitorTarget {
-                        monitor_id: g.game_monitor_id.clone(),
-                        monitor_bounds: g.game_monitor_bounds,
-                    })
-            });
+                    .map(|w| DetectedGameWindow {
+                        identity: w.identity,
+                        title: w.title.clone(),
+                        game_monitor_id: pinned_target.monitor_id.clone(),
+                        game_monitor_bounds: pinned_target.monitor_bounds,
+                    }),
+                Some(pinned_target.clone()),
+            ),
+            (None, Some(game)) => (
+                Some(game.clone()),
+                Some(MonitorTarget {
+                    monitor_id: game.game_monitor_id.clone(),
+                    monitor_bounds: game.game_monitor_bounds,
+                }),
+            ),
+            (None, None) => (None, None),
+        };
 
         // The Auto-follow focus state machine.
-        match (&game_window, &self.lock) {
-            // ENGAGE: a Game window is foreground and the Lock is not engaged
-            // on it — a fresh engage, a re-engage after any focus loss (or
-            // the end of the Monitor picker), or focus moving directly from
-            // one Game window to another (a focus loss from the first).
+        match (&activation_window, &self.lock) {
+            // ENGAGE: an activation window is foreground (auto: a Game
+            // window; pin: any real window) and the Lock is not engaged on
+            // it — a fresh engage, a re-engage after any focus loss (or the
+            // end of the Monitor picker), or focus moving directly from one
+            // window to another (a focus loss from the first).
             (Some(game), lock) if Self::engaged_identity(lock) != Some(game.identity) => {
                 let target = target.clone().unwrap_or_else(|| MonitorTarget {
                     monitor_id: game.game_monitor_id.clone(),
@@ -249,11 +277,13 @@ impl LockCore {
                     monitor_bounds: target.monitor_bounds,
                 };
             }
-            // RELEASE: the foreground is no longer a Game window (another
-            // window or the desktop) while the Lock is engaged. The release
-            // is immediate and unconditional — that focus-loss release IS the
-            // Escape hatch. No clip is set while released. A Monitor
-            // override is unaffected: the pin survives a focus loss.
+            // RELEASE: no activation window — auto: the foreground is no
+            // longer a Game window (another window or the desktop); pin: the
+            // desktop (another window re-engages on the pinned monitor) —
+            // while the Lock is engaged. The release is immediate and
+            // unconditional — that focus-loss release IS the Escape hatch.
+            // No clip is set while released. A Monitor override is
+            // unaffected: the pin survives a focus loss.
             (None, LockState::Engaged { .. }) => {
                 sys.clear_cursor_clip();
                 self.lock = LockState::Released;
@@ -328,9 +358,10 @@ pub enum LockState {
     Released,
     /// Engaged: the cursor is clipped to the target monitor's FULL bounds.
     Engaged {
-        /// The identity of the Game window the Lock is following.
+        /// The identity of the activation window the Lock is following (the
+        /// Game window in auto mode; the foreground window in pin mode).
         window_identity: usize,
-        /// The Game window's title, for the on-demand window.
+        /// That window's title, for the on-demand window.
         window_title: String,
         /// The target monitor's id — the Game monitor, or the pinned monitor
         /// when a Monitor override is active.
@@ -1580,8 +1611,12 @@ mod tests {
         );
     }
 
+    /// Pin mode (user decision 2026-11-12, ticket #5): while a pin is
+    /// active the fills-monitor requirement is dropped — the Lock engages on
+    /// the pinned monitor for ANY real (non-desktop) foreground window, e.g.
+    /// a windowed game with a title bar or a maximized browser.
     #[test]
-    fn pin_does_not_change_the_activation_rule() {
+    fn pin_engages_on_a_non_filling_window() {
         let mut fake = FakeSystem::new();
         two_monitors(&mut fake);
         fake.set_foreground(Some(game_on_m1(100)));
@@ -1592,30 +1627,102 @@ mod tests {
         brain.confirm_picker(&mut fake); // pin m2
         brain.update(&mut fake); // engage on m2
 
-        // A non-Game foreground window (browser-sized) while pinned: no
-        // engagement — the activation rule is unchanged by the override.
+        // A non-Game foreground window (browser-sized) while pinned: the pin
+        // engages the Lock on the pinned monitor — no fills-monitor
+        // requirement.
         fake.set_foreground(Some(maximized_browser()));
-        let snap = brain.update(&mut fake);
-        assert!(
-            matches!(snap.lock, LockState::Released),
-            "a non-Game foreground window never engages, even while a monitor is pinned"
-        );
-        assert_eq!(fake.effective_clip(), None, "no clip while released");
-        assert_eq!(
-            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
-            Some("m2"),
-            "the pin survives a focus loss"
-        );
-
-        // The Game regains focus: the Lock re-engages on the pinned monitor.
-        fake.set_foreground(Some(game_on_m1(100)));
         let snap = brain.update(&mut fake);
         assert!(
             matches!(
                 snap.lock,
                 LockState::Engaged { monitor_id, .. } if monitor_id == "m2"
             ),
-            "re-engagement targets the pinned monitor"
+            "a non-Game foreground window engages while a monitor is pinned"
+        );
+        assert_eq!(
+            fake.effective_clip(),
+            Some(M2),
+            "the clip targets the pinned monitor"
+        );
+        assert_eq!(
+            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
+            Some("m2"),
+            "the pin is reported in the snapshot"
+        );
+    }
+
+    /// Pin mode, the Escape hatch: the desktop background releases the Lock
+    /// (so the cursor is never trapped), and any window regaining focus
+    /// re-engages on the pinned monitor.
+    #[test]
+    fn pin_releases_on_the_desktop_and_reengages_on_any_window() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(Point { x: 3000, y: 720 });
+        let mut brain = LockCore::new();
+        brain.start_picker(&mut fake);
+        brain.update(&mut fake);
+        brain.confirm_picker(&mut fake); // pin m2
+        brain.update(&mut fake); // engage on m2
+
+        // The desktop background releases the Lock while pinned.
+        fake.set_foreground(None);
+        let snap = brain.update(&mut fake);
+        assert!(
+            matches!(snap.lock, LockState::Released),
+            "the desktop releases the Lock while pinned (the Escape hatch)"
+        );
+        assert_eq!(fake.effective_clip(), None, "no clip while released");
+        assert_eq!(
+            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
+            Some("m2"),
+            "the pin survives the release"
+        );
+
+        // Any window regaining focus re-engages on the pinned monitor.
+        fake.set_foreground(Some(maximized_browser()));
+        let snap = brain.update(&mut fake);
+        assert!(
+            matches!(
+                snap.lock,
+                LockState::Engaged { monitor_id, .. } if monitor_id == "m2"
+            ),
+            "a window regaining focus re-engages on the pinned monitor"
+        );
+    }
+
+    /// Pin mode: focus moving from one non-Game window to another does NOT
+    /// release — the Lock re-engages on the pinned monitor (that is what
+    /// "pin the mouse" means: the cursor stays on the pinned monitor).
+    #[test]
+    fn pin_survives_focus_switch_between_non_game_windows() {
+        let mut fake = FakeSystem::new();
+        two_monitors(&mut fake);
+        fake.set_foreground(Some(game_on_m1(100)));
+        fake.set_cursor(Point { x: 3000, y: 720 });
+        let mut brain = LockCore::new();
+        brain.start_picker(&mut fake);
+        brain.update(&mut fake);
+        brain.confirm_picker(&mut fake); // pin m2
+        brain.update(&mut fake); // engage on m2
+
+        // Focus moves from the Game to another (non-Game) window while
+        // pinned: the Lock stays on the pinned monitor.
+        fake.set_foreground(Some(window(300, "Editor", 500, 0, 800, 600)));
+        let snap = brain.update(&mut fake);
+        assert!(
+            matches!(
+                snap.lock,
+                LockState::Engaged { monitor_id, window_title, .. }
+                    if monitor_id == "m2" && window_title == "Editor"
+            ),
+            "focus moving between windows re-engages on the pinned monitor"
+        );
+        assert_eq!(
+            fake.effective_clip(),
+            Some(M2),
+            "the clip stays on the pinned monitor"
         );
     }
 }
