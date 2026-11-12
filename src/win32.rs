@@ -9,6 +9,7 @@
 
 use crate::seam::{MonitorInfo, Point, Rect, SystemAccess, WindowInfo};
 
+use windows::core::{PCSTR, PCWSTR};
 use windows::Win32::Foundation::{LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
@@ -16,9 +17,41 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowTextW,
+    ClipCursor, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowTextW, SetCursorPos,
 };
+
+// UnClipCursor (WINBOOL WINAPI UnClipCursor(void)) is a plain user32
+// function that the windows 0.62.2 bindings do not expose. It cannot be
+// linked normally either: the Windows SDK 10.0.26100 user32.lib import
+// library omits it (verified: ClipCursor is present, UnClipCursor is not),
+// so it is resolved at runtime from the already-loaded user32.dll.
+static UN_CLIP_CURSOR: std::sync::OnceLock<unsafe extern "system" fn()> =
+    std::sync::OnceLock::new();
+
+fn un_clip_cursor() {
+    let f = *UN_CLIP_CURSOR.get_or_init(|| {
+        unsafe {
+            // user32.dll is always loaded in a Windows process.
+            let module: Vec<u16> =
+                "user32.dll".encode_utf16().chain(std::iter::once(0)).collect();
+            let h = GetModuleHandleW(PCWSTR(module.as_ptr()))
+                .expect("user32.dll is loaded in every Windows process");
+            let name: Vec<u8> = b"UnClipCursor\0".to_vec();
+            let Some(resolved) = GetProcAddress(h, PCSTR(name.as_ptr().cast())) else {
+                panic!("UnClipCursor is a public user32 export");
+            };
+            // The crate types FARPROC with a placeholder return type, so
+            // transmute to the real signature: WINBOOL WINAPI UnClipCursor(void).
+            std::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                unsafe extern "system" fn(),
+            >(resolved)
+        }
+    });
+    unsafe { f() };
+}
 
 /// Enable per-monitor v2 DPI awareness. MUST be the first statement of main,
 /// before any window or tray creation. An Err return just means the process
@@ -120,6 +153,43 @@ fn cursor_position() -> Point {
     }
 }
 
+/// OUT — set the cursor clip to exactly `rect` (the Lock's confinement while
+/// engaged). Repeated ClipCursor calls intersect, and the clip is global
+/// Windows state, so any existing clip is removed first; the result is that
+/// the clip is exactly `rect`.
+fn set_cursor_clip(rect: Rect) {
+    un_clip_cursor();
+    unsafe {
+        let r = RECT {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
+        };
+        let _ = ClipCursor(Some(&r));
+    }
+}
+
+/// OUT — clear the cursor clip. Called at startup (stale-clip cleanup), on
+/// every Lock release, and on exit.
+fn clear_cursor_clip() {
+    un_clip_cursor();
+}
+
+/// OUT — move the cursor (re-center on engage).
+fn move_cursor(point: Point) {
+    unsafe {
+        let _ = SetCursorPos(point.x, point.y);
+    }
+}
+
+/// Clear any cursor clip from outside the poll loop — the tray's Exit path.
+/// The clip is global Windows state that survives process death (user story
+/// 20), so it must be cleared before the process goes.
+pub fn clear_clip() {
+    clear_cursor_clip();
+}
+
 fn rect_from_win32(r: &RECT) -> Rect {
     Rect {
         x: r.left,
@@ -148,12 +218,15 @@ impl SystemAccess for Win32System {
         cursor_position()
     }
 
-    // Inert stubs: no cursor locking in this ticket. The real ClipCursor /
-    // UnClipCursor / SetCursorPos land in ticket #3 together with the brain's
-    // Lock state machine (and the startup/exit clip cleanup).
-    fn set_cursor_clip(&mut self, _rect: Rect) {}
+    fn set_cursor_clip(&mut self, rect: Rect) {
+        set_cursor_clip(rect)
+    }
 
-    fn clear_cursor_clip(&mut self) {}
+    fn clear_cursor_clip(&mut self) {
+        clear_cursor_clip()
+    }
 
-    fn move_cursor(&mut self, _point: Point) {}
+    fn move_cursor(&mut self, point: Point) {
+        move_cursor(point)
+    }
 }

@@ -24,14 +24,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tray creation (spec; user story 21).
     win32::set_per_monitor_dpi_awareness();
 
-    // The tray icon is created on the main thread; eframe's event loop runs
-    // on that same thread and pumps its messages. It must stay alive for the
-    // whole run — dropping it would destroy the icon.
-    let _tray = app::create_tray()?;
+    // The tray icon is created on the main thread and owned by the eframe
+    // app: the tray's message window is pumped by the UI thread, so the
+    // TrayIcon handle must live there (it is not Send). It starts in the
+    // released state; the poll thread reports state changes and the UI
+    // thread swaps the icon (user story 14).
+    let icons = app::TrayIcons::new();
+    let tray = app::create_tray(&icons.released)?;
 
     // Poll thread: reads the SystemAccess seam, feeds the brain, publishes
-    // the snapshot for the window. ~100 ms (spec); the tighter ~50 ms cadence
-    // while the Monitor picker is active comes with ticket #4.
+    // the snapshot for the window, and reports Lock-state changes to the UI
+    // thread. ~100 ms (spec); the tighter ~50 ms cadence while the Monitor
+    // picker is active comes with ticket #4.
+    let (state_tx, state_rx) = std::sync::mpsc::channel::<bool>();
     let shared: std::sync::Arc<std::sync::Mutex<core::LockSnapshot>> =
         std::sync::Arc::new(std::sync::Mutex::new(core::LockSnapshot::default()));
     let poll_shared = shared.clone();
@@ -41,8 +46,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Startup: clear any stale clip left by a previous run (user story
         // 20 — the clip is global Windows state).
         brain.startup(&mut sys);
+        // The tray starts with the released icon, so only report when the
+        // engaged state actually changes.
+        let mut last_engaged: Option<bool> = Some(false);
         loop {
             let snap = brain.update(&mut sys);
+            let engaged = matches!(snap.lock, core::LockState::Engaged { .. });
+            if last_engaged != Some(engaged) {
+                let _ = state_tx.send(engaged);
+                last_engaged = Some(engaged);
+            }
             *poll_shared.lock().unwrap() = snap;
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
@@ -58,7 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Monitor Lock",
         options,
-        Box::new(move |_cc| Ok(Box::new(app::MonitorLockApp { shared }) as _)),
+        Box::new(move |_cc| Ok(Box::new(app::MonitorLockApp {
+            shared,
+            tray,
+            icons,
+            state_rx,
+        }) as _)),
     )?;
     Ok(())
 }
