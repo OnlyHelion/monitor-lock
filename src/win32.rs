@@ -18,6 +18,7 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
     ClipCursor, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowTextW, SetCursorPos,
 };
@@ -188,6 +189,27 @@ fn move_cursor(point: Point) {
 /// 20), so it must be cleared before the process goes.
 pub fn clear_clip() {
     clear_cursor_clip();
+}
+
+/// IN — the Monitor picker's global Esc observation: true while the physical
+/// Esc key is down. GetAsyncKeyState reports the hardware-level state and is
+/// correct from the poll thread (GetKeyState is tied to the calling thread's
+/// message queue — the wrong API for a background poller).
+pub fn esc_down() -> bool {
+    key_down(VK_ESCAPE.0)
+}
+
+/// IN — the Monitor picker's global left-click observation: true while the
+/// physical left mouse button is down. The click is resolved from the cursor
+/// position (the brain), not through the input-transparent overlay.
+pub fn left_click_down() -> bool {
+    key_down(VK_LBUTTON.0)
+}
+
+/// The high-order bit (0x8000) of GetAsyncKeyState is set while the key is
+/// down.
+fn key_down(vk: u16) -> bool {
+    unsafe { GetAsyncKeyState(vk as i32) as u16 & 0x8000 != 0 }
 }
 
 fn rect_from_win32(r: &RECT) -> Rect {
