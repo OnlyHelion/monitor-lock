@@ -1,5 +1,5 @@
 //! Embed the exe icon: res/icon.rc compiles res/icon.ico into the binary so
-//! Explorer, the taskbar and Alt+Tab show the same padlock as the tray.
+//! Explorer shows the app icon (src/icon.rs, engaged art).
 //! rc.exe is located by embed-resource (PATH or the installed Windows SDK —
 //! this box keeps it in the 10.0.26100 SDK, not on PATH). The release
 //! workflow's windows-latest runner has the SDK as well.

@@ -14,6 +14,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
+mod icon;
 #[cfg(test)]
 mod fake;
 mod seam;
@@ -163,7 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Monitor Lock")
-            .with_inner_size([400.0, 210.0]),
+            .with_inner_size([400.0, 210.0])
+            // The tray starts released, so the window does too.
+            .with_icon(app::window_icon(false)),
         ..Default::default()
     };
     eframe::run_native(

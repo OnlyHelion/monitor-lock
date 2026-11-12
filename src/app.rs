@@ -10,23 +10,30 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::core;
+use crate::icon;
 use crate::seam::Rect;
 use crate::win32;
 
 /// The two pre-built tray icons: one per Lock state, swapped on state change
-/// so the state is visible at a glance (user story 14).
+/// so the state is visible at a glance (user story 14). The window icon
+/// swaps along with them.
 pub struct TrayIcons {
-    /// Engaged: amber — the cursor is confined to the Game monitor.
+    /// Engaged: amber screen with a padlock — the cursor is confined to the
+    /// Game monitor.
     pub engaged: Icon,
-    /// Released: gray — the cursor is free on all monitors.
+    /// Released: dark gray screen — the cursor is free on all monitors.
     pub released: Icon,
+    pub window_engaged: Arc<egui::IconData>,
+    pub window_released: Arc<egui::IconData>,
 }
 
 impl TrayIcons {
     pub fn new() -> Self {
         Self {
-            engaged: padlock_icon((255, 191, 64)),
-            released: padlock_icon((136, 136, 136)),
+            engaged: tray_icon(true),
+            released: tray_icon(false),
+            window_engaged: Arc::new(window_icon(true)),
+            window_released: Arc::new(window_icon(false)),
         }
     }
 }
@@ -89,14 +96,16 @@ impl eframe::App for MonitorLockApp {
                 win32::hide_main_window();
             }
         }
-        // Lock-state changes reported by the poll thread: swap the tray icon.
+        // Lock-state changes reported by the poll thread: swap the tray and
+        // window icons.
         while let Ok(engaged) = self.state_rx.try_recv() {
-            let icon = if engaged {
-                self.icons.engaged.clone()
+            let (icon, window) = if engaged {
+                (self.icons.engaged.clone(), self.icons.window_engaged.clone())
             } else {
-                self.icons.released.clone()
+                (self.icons.released.clone(), self.icons.window_released.clone())
             };
             let _ = self.tray.set_icon(Some(icon));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Icon(Some(window)));
         }
 
         let snap = self.shared.lock().unwrap().clone();
@@ -286,86 +295,18 @@ pub fn install_tray_handlers(ctx: egui::Context, cmd_tx: mpsc::Sender<UiCommand>
     }));
 }
 
-/// The padlock art as 32x32 top-down RGBA pixels, transparent background —
-/// the single source of the icon (spec: "default icon for now", custom art
-/// out of scope). Both the tray icon (amber = engaged, gray = released) and
-/// res/icon.ico (the exe icon, embedded by build.rs) are rendered from it;
-/// keep the .ico in sync — `icon_tests::the_ico_is_the_amber_tray_icon`
-/// fails if it drifts.
-fn padlock_rgba(rgb: (u8, u8, u8)) -> Vec<u8> {
-    const S: u32 = 32;
-    let mut rgba = vec![0u8; (S * S * 4) as usize];
-    for y in 0..S {
-        for x in 0..S {
-            // Pixel-center coordinates with the grid origin (16, 16).
-            let px = (x as f32 + 0.5) - 16.0;
-            let py = (y as f32 + 0.5) - 16.0;
-            // Body: the lower block of the padlock.
-            let body = (8..=23).contains(&x) && (16..=28).contains(&y);
-            // Shackle: the upper ring (outer r 9, inner r 5.5), centered at
-            // (0, -4), top half only.
-            let d = (px * px + (py + 4.0) * (py + 4.0)).sqrt();
-            let shackle = (5.5..=9.0).contains(&d) && y < 16;
-            // Keyhole: a small dot in the body.
-            let keyhole = (px * px + (py - 4.0) * (py - 4.0)).sqrt() < 2.5;
-            if (body || shackle) && !keyhole {
-                let i = ((y * S + x) as usize) * 4;
-                rgba[i] = rgb.0;
-                rgba[i + 1] = rgb.1;
-                rgba[i + 2] = rgb.2;
-                rgba[i + 3] = 255;
-            }
-        }
-    }
-    rgba
+/// A tray icon for one Lock state, drawn by `icon::rgba` at 32x32 (Windows
+/// scales it to the tray's size).
+fn tray_icon(engaged: bool) -> Icon {
+    Icon::from_rgba(icon::rgba(32, engaged), 32, 32).expect("a 32x32 RGBA buffer is a valid icon")
 }
 
-/// A simple generated padlock icon (32x32 RGBA, transparent background).
-/// One per Lock state (amber = engaged, gray = released).
-fn padlock_icon(rgb: (u8, u8, u8)) -> Icon {
-    Icon::from_rgba(padlock_rgba(rgb), 32, 32).expect("a 32x32 RGBA buffer is a valid icon")
-}
-
-#[cfg(test)]
-mod icon_tests {
-    //! Asset sync, not thin-layer behavior: res/icon.ico (the exe icon,
-    //! embedded by build.rs) must stay identical to the amber tray icon, or
-    //! the exe and the tray would show different padlocks.
-
-    use super::*;
-
-    #[test]
-    fn the_ico_is_the_amber_tray_icon() {
-        let ico = std::fs::read("res/icon.ico").expect("res/icon.ico is checked in");
-        // ICONDIR: reserved, type, count.
-        let count = u16::from_le_bytes(ico[4..6].try_into().unwrap()) as usize;
-        assert_eq!(count, 1, "one image: the 32x32 padlock");
-        // ICONDIRENTRY: width, height, ..., offset.
-        let (w, h) = (u32::from(ico[6]), u32::from(ico[7]));
-        let offset = u32::from_le_bytes(ico[18..22].try_into().unwrap()) as usize;
-        assert_eq!((w, h, offset), (32, 32, 22));
-        // Image data: BITMAPINFOHEADER, then bottom-up BGRA rows (the AND
-        // mask follows the pixels).
-        let bih_w = i32::from_le_bytes(ico[offset + 4..offset + 8].try_into().unwrap());
-        let bih_h = i32::from_le_bytes(ico[offset + 8..offset + 12].try_into().unwrap());
-        let bpp = u16::from_le_bytes(ico[offset + 14..offset + 16].try_into().unwrap());
-        assert_eq!((bih_w, bih_h, bpp), (32, 64, 32));
-        let px = &ico[offset + 40..];
-        let mut top_down = vec![0u8; 32 * 32 * 4];
-        for y in 0..32usize {
-            for x in 0..32usize {
-                let d = ((31 - y) * 32 + x) * 4; // bottom-up BGRA
-                let s = (y * 32 + x) * 4;
-                top_down[s] = px[d + 2];
-                top_down[s + 1] = px[d + 1];
-                top_down[s + 2] = px[d];
-                top_down[s + 3] = px[d + 3];
-            }
-        }
-        assert_eq!(
-            top_down,
-            padlock_rgba((255, 191, 64)),
-            "the exe's icon must be the amber padlock (regenerate res/icon.ico)"
-        );
+/// The window's icon (title bar, taskbar, Alt+Tab) for one Lock state. Without
+/// one, eframe shows its own default (the egui logo).
+pub fn window_icon(engaged: bool) -> egui::IconData {
+    egui::IconData {
+        rgba: icon::rgba(64, engaged),
+        width: 64,
+        height: 64,
     }
 }

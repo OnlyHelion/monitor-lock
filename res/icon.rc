@@ -1,5 +1,4 @@
-/* The exe's icon (Explorer, taskbar, Alt+Tab): the same amber padlock the
-   tray shows. icon.ico is generated from padlock_rgba in src/app.rs; the
-   test icon_tests::the_ico_is_the_amber_tray_icon fails if the two drift
-   apart. */
+/* The exe's icon (Explorer, taskbar, Alt+Tab): the engaged art (amber
+   screen with a padlock). icon.ico is generated from src/icon.rs; the test
+   icon::tests::ico_file_matches_the_art fails if the two drift apart. */
 1 ICON "icon.ico"
