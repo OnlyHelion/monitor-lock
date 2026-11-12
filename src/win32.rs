@@ -9,7 +9,7 @@
 
 use crate::seam::{MonitorInfo, Point, Rect, SystemAccess, WindowInfo};
 
-use windows::Win32::Foundation::{LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
@@ -19,8 +19,9 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowTextW,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos,
+    ClipCursor, GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetShellWindow,
+    GetSystemMetrics, GetWindowRect, GetWindowTextW, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos,
 };
 use windows::core::{PCSTR, PCWSTR};
 
@@ -158,11 +159,27 @@ unsafe extern "system" fn monitor_enum(
     windows::core::BOOL(1)
 }
 
+/// True when `hwnd` is the desktop or part of it: the shell window (Progman)
+/// or any window rooted at it (SHELLDLL_DefView, the SysListView32 icon list
+/// view, WorkerW — probed 2026-11-12, each spanning the whole virtual screen
+/// 0,0,4480x1440 on the test machine). Those are shell UI, never Game
+/// windows; without this filter the desktop covers every monitor 100% and
+/// the Lock engages on the background — even when a desktop icon is
+/// selected (ticket #5, 2026-11-12). A real app's foreground window roots
+/// at its own top-level window, never at the shell.
+fn is_desktop(hwnd: HWND) -> bool {
+    let shell = unsafe { GetShellWindow() };
+    !shell.is_invalid() && unsafe { GetAncestor(hwnd, GA_ROOT) } == shell
+}
+
 /// IN — foreground window (identity + title + bounds). None = the desktop —
 /// never a Game window.
 fn foreground_window() -> Option<WindowInfo> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.is_invalid() {
+        return None;
+    }
+    if is_desktop(hwnd) {
         return None;
     }
     let mut title_buf = [0u16; 512];
@@ -295,6 +312,55 @@ mod tests {
     #[test]
     fn real_system_releases_the_cursor_clip_without_panic() {
         super::release_clip();
+    }
+
+    /// Real-seam regression guard (ticket #5, 2026-11-12): the desktop and
+    /// all of its children (SHELLDLL_DefView, the SysListView32 icon list
+    /// view, WorkerW) span the whole virtual screen on the test machine and
+    /// would otherwise count as Game windows covering every monitor 100% —
+    /// clicking the background or a desktop icon engaged the Lock. The
+    /// filter must identify the shell window and every one of its children
+    /// as desktop UI.
+    #[test]
+    fn real_system_desktop_and_its_children_are_filtered() {
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetShellWindow};
+        use windows::core::BOOL;
+
+        struct Counter {
+            children: usize,
+            unfiltered: usize,
+        }
+        unsafe extern "system" fn count_shell_child(h: HWND, lparam: LPARAM) -> BOOL {
+            let c = unsafe { &mut *(lparam.0 as *mut Counter) };
+            c.children += 1;
+            if !super::is_desktop(h) {
+                c.unfiltered += 1;
+            }
+            BOOL(1)
+        }
+
+        let shell = unsafe { GetShellWindow() };
+        assert!(!shell.is_invalid(), "the shell window exists");
+        assert!(
+            super::is_desktop(shell),
+            "the shell window (Progman) itself must be filtered as desktop"
+        );
+
+        let counter = Box::new(Counter { children: 0, unfiltered: 0 });
+        let ptr = Box::into_raw(counter);
+        unsafe {
+            let _ = EnumChildWindows(Some(shell), Some(count_shell_child), LPARAM(ptr as isize));
+        }
+        let counter = unsafe { Box::from_raw(ptr) };
+        assert!(
+            counter.children > 0,
+            "the shell window has children (the desktop UI)"
+        );
+        assert_eq!(
+            counter.unfiltered, 0,
+            "every shell child (desktop UI) must be filtered as desktop"
+        );
     }
 }
 

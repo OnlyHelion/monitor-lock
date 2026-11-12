@@ -35,13 +35,16 @@ use crate::seam::{MonitorInfo, Rect, SystemAccess, WindowInfo};
 /// Fills-monitor threshold: the fraction of a monitor's FULL bounds the
 /// foreground window must cover to be a Game window.
 ///
-/// Set above the user's measured work-area fraction (95.6–96.7% of full
-/// bounds) so a maximized browser — sized to the work area — does NOT count
-/// as a Game window. The spec's "~95%" is superseded by that settled edge;
-/// this is the single tunable constant, and the in-game hand-check (ticket #5)
-/// is the arbiter if a "borderless maximized" game covering only the work
-/// area must engage instead.
-pub const FILL_THRESHOLD: f64 = 0.97;
+/// Must sit between a maximized (work-area sized) window and a true
+/// borderless-fullscreen one (100%). On the 2026-11-12 test machine a real
+/// maximized Edge measures 97.22% of the monitor (40 px taskbar; the 8 px
+/// maximized overscan included), so the earlier 0.97 — set against the
+/// 48 px taskbar estimate of 95.6–96.7% — let it engage. 0.98 keeps margin
+/// on both sides. The in-game hand-check (ticket #5) is the arbiter if a
+/// "borderless maximized" game covering only the work area must engage
+/// instead: it is geometrically indistinguishable from a maximized browser
+/// and would need a lower value.
+pub const FILL_THRESHOLD: f64 = 0.98;
 
 /// The brain. Owns the Lock state (the Auto-follow focus state machine) and
 /// the tunable threshold; it makes no Windows calls of its own.
@@ -507,6 +510,25 @@ mod tests {
         );
     }
 
+    /// Ticket #5, 2026-11-12: the user's real maximized Edge on the test
+    /// machine (2560x1440 monitor, 40 px taskbar) measures -8,-8 ->
+    /// 2568,1400 — 2576x1408, the standard 8 px maximized overscan — which
+    /// is 97.22% of the monitor's full bounds. At the old 0.97 threshold
+    /// the browser engaged the Lock; it must not.
+    #[test]
+    fn a_measured_maximized_browser_does_not_fill() {
+        let mut fake = FakeSystem::new();
+        fake.set_monitors(vec![monitor("m1", 0, 0, 2560, 1440)]);
+        fake.set_foreground(Some(window(1, "Edge", -8, -8, 2576, 1408)));
+
+        let snap = observe(&mut fake);
+
+        assert!(
+            snap.game_window.is_none(),
+            "a real measured maximized browser (97.22% of full bounds) does not fill"
+        );
+    }
+
     #[test]
     fn window_slightly_larger_than_its_monitor_fills_it() {
         let mut fake = FakeSystem::new();
@@ -545,41 +567,41 @@ mod tests {
 
     #[test]
     fn just_under_threshold_is_not_a_game_window() {
-        // 1000x1000 monitor; window covers 96.9% — just under FILL_THRESHOLD.
+        // 1000x1000 monitor; window covers 97.9% — just under FILL_THRESHOLD.
         let mut fake = FakeSystem::new();
         fake.set_monitors(vec![monitor("m1", 0, 0, 1000, 1000)]);
-        fake.set_foreground(Some(window(1, "Window", 0, 0, 1000, 969)));
+        fake.set_foreground(Some(window(1, "Window", 0, 0, 1000, 979)));
 
         let snap = observe(&mut fake);
 
         assert!(
             snap.game_window.is_none(),
-            "96.9% of the full bounds is just under the threshold"
+            "97.9% of the full bounds is just under the threshold"
         );
     }
 
     #[test]
     fn just_over_threshold_is_a_game_window() {
-        // 1000x1000 monitor; window covers 97.1% — just over FILL_THRESHOLD.
+        // 1000x1000 monitor; window covers 98.1% — just over FILL_THRESHOLD.
         let mut fake = FakeSystem::new();
         fake.set_monitors(vec![monitor("m1", 0, 0, 1000, 1000)]);
-        fake.set_foreground(Some(window(1, "Game", 0, 0, 1000, 971)));
+        fake.set_foreground(Some(window(1, "Game", 0, 0, 1000, 981)));
 
         let snap = observe(&mut fake);
 
         assert_eq!(
             snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
-            "97.1% of the full bounds is just over the threshold"
+            "98.1% of the full bounds is just over the threshold"
         );
     }
 
     #[test]
     fn exactly_at_threshold_is_a_game_window() {
-        // The rule is "at least" the threshold: 97.0% exactly counts.
+        // The rule is "at least" the threshold: 98.0% exactly counts.
         let mut fake = FakeSystem::new();
         fake.set_monitors(vec![monitor("m1", 0, 0, 1000, 1000)]);
-        fake.set_foreground(Some(window(1, "Game", 0, 0, 1000, 970)));
+        fake.set_foreground(Some(window(1, "Game", 0, 0, 1000, 980)));
 
         let snap = observe(&mut fake);
 
