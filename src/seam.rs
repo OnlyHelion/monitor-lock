@@ -50,6 +50,24 @@ impl Rect {
             None
         }
     }
+
+    /// True when the point is inside this rect. The right and bottom edges
+    /// are exclusive: a point exactly on them is outside.
+    pub fn contains(&self, p: Point) -> bool {
+        p.x >= self.x
+            && p.x < self.x + self.width
+            && p.y >= self.y
+            && p.y < self.y + self.height
+    }
+
+    /// The center of the rect (integer division). Virtual-screen math:
+    /// negative coordinates are handled by plain addition.
+    pub fn center(&self) -> Point {
+        Point {
+            x: self.x + self.width / 2,
+            y: self.y + self.height / 2,
+        }
+    }
 }
 
 /// One monitor, as the brain sees it.
@@ -76,20 +94,18 @@ pub struct WindowInfo {
 /// The single seam between the brain and Windows.
 ///
 /// In: monitors, foreground window, cursor position.
-/// Out: set-clip, clear-clip, move-cursor. In ticket #2 the three out actions
-/// are inert stubs — no cursor locking yet (ticket #3).
+/// Out: set-clip, clear-clip, move-cursor. The brain (LockCore) uses the out
+/// actions for the Lock: the cursor clip is the Lock's confinement, the
+/// cursor move is the re-center on engage.
 pub trait SystemAccess {
     fn monitors(&self) -> Vec<MonitorInfo>;
     /// None = the desktop (no foreground window) — never a Game window.
     fn foreground_window(&self) -> Option<WindowInfo>;
-    // The cursor and the three out actions are part of the agreed seam
-    // surface; the brain starts using them in ticket #3 (cursor locking).
-    #[allow(dead_code)]
     fn cursor_position(&self) -> Point;
-    #[allow(dead_code)]
+    /// Set the cursor clip to `rect` (the Lock's confinement while engaged).
     fn set_cursor_clip(&mut self, rect: Rect);
-    #[allow(dead_code)]
+    /// Remove the cursor clip (on every Lock release, startup, and exit).
     fn clear_cursor_clip(&mut self);
-    #[allow(dead_code)]
+    /// Move the cursor (re-center on engage).
     fn move_cursor(&mut self, point: Point);
 }

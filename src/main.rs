@@ -36,10 +36,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::sync::Arc::new(std::sync::Mutex::new(core::LockSnapshot::default()));
     let poll_shared = shared.clone();
     std::thread::spawn(move || {
-        let sys = win32::Win32System;
-        let brain = core::LockCore::new();
+        let mut sys = win32::Win32System;
+        let mut brain = core::LockCore::new();
+        // Startup: clear any stale clip left by a previous run (user story
+        // 20 — the clip is global Windows state).
+        brain.startup(&mut sys);
         loop {
-            let snap = brain.observe(&sys);
+            let snap = brain.update(&mut sys);
             *poll_shared.lock().unwrap() = snap;
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
