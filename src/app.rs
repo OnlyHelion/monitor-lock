@@ -30,13 +30,30 @@ impl TrayIcons {
     }
 }
 
+/// A user command from the UI (tray menu or window button) to the poll
+/// thread, which applies it to the brain. Small and `Copy`: one mpsc sender
+/// is shared by both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiCommand {
+    /// Start the Monitor picker (explicit user command only — the picker
+    /// never starts on its own; idempotent while already picking).
+    StartPicker,
+    /// Back to auto: clear the Monitor override, cancel an active picker,
+    /// and resume following the Game monitor.
+    BackToAuto,
+}
+
 /// Create the tray icon and its menu. Menu ids are the command vocabulary
-/// drained by `drain_tray_events`; ticket #4 adds the picker commands.
+/// drained by `drain_tray_events`: Open, Pick monitor, Back to auto, Exit.
 pub fn create_tray(initial_icon: &Icon) -> Result<TrayIcon, tray_icon::Error> {
     let open = MenuItem::with_id("open", "Open", true, None);
+    let pick = MenuItem::with_id("pick", "Pick monitor", true, None);
+    let auto = MenuItem::with_id("auto", "Back to auto", true, None);
     let exit = MenuItem::with_id("exit", "Exit", true, None);
     let menu = Menu::new();
-    menu.append_items(&[&open, &exit]).expect("static menu items always append");
+    menu
+        .append_items(&[&open, &pick, &auto, &exit])
+        .expect("static menu items always append");
     TrayIconBuilder::new()
         .with_icon(initial_icon.clone())
         .with_tooltip("Monitor Lock")
@@ -55,6 +72,8 @@ pub struct MonitorLockApp {
     pub(crate) tray: TrayIcon,
     pub(crate) icons: TrayIcons,
     pub(crate) state_rx: mpsc::Receiver<bool>,
+    /// Sends user commands (tray menu / window buttons) to the poll thread.
+    pub(crate) cmd_tx: mpsc::Sender<UiCommand>,
 }
 
 impl eframe::App for MonitorLockApp {
@@ -66,7 +85,7 @@ impl eframe::App for MonitorLockApp {
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
-            drain_tray_events(&ctx);
+            drain_tray_events(&ctx, &self.cmd_tx);
         }
         // Lock-state changes reported by the poll thread: swap the tray icon.
         while let Ok(engaged) = self.state_rx.try_recv() {
@@ -93,18 +112,20 @@ impl eframe::App for MonitorLockApp {
                 ));
             }
 
+            if snap.picking {
+                ui.label(egui::RichText::new(
+                    "Monitor picker: move to a monitor — click to pin, Esc to cancel",
+                )
+                .color(egui::Color32::from_rgb(255, 255, 0)));
+            }
+
             ui.separator();
             match &snap.lock {
                 core::LockState::Released => {
                     ui.label(egui::RichText::new("Lock: released")
                         .color(egui::Color32::from_rgb(136, 136, 136)));
                 }
-                core::LockState::Engaged {
-                    window_title,
-                    monitor_id,
-                    monitor_bounds,
-                    ..
-                } => {
+                core::LockState::Engaged { window_title, .. } => {
                     ui.label(egui::RichText::new(format!(
                         "Lock: engaged — {}",
                         if window_title.is_empty() {
@@ -114,16 +135,53 @@ impl eframe::App for MonitorLockApp {
                         }
                     ))
                     .color(egui::Color32::from_rgb(80, 200, 120)));
-                    ui.label(format!(
-                        "Target monitor: {}  ({}, {}) {}x{}",
-                        monitor_id,
-                        monitor_bounds.x,
-                        monitor_bounds.y,
-                        monitor_bounds.width,
-                        monitor_bounds.height
-                    ));
                 }
             }
+
+            // The current target: the pinned monitor (Monitor override) if
+            // any, else the Game monitor. Shown while the Lock is released
+            // too — a pin outlives a focus loss.
+            if let Some(pinned) = &snap.pinned {
+                ui.label(format!(
+                    "Target monitor (pinned): {}  ({}, {}) {}x{}",
+                    pinned.monitor_id,
+                    pinned.monitor_bounds.x,
+                    pinned.monitor_bounds.y,
+                    pinned.monitor_bounds.width,
+                    pinned.monitor_bounds.height
+                ));
+            } else if let Some(game) = &snap.game_window {
+                ui.label(format!(
+                    "Target monitor (auto): {}  ({}, {}) {}x{}",
+                    game.game_monitor_id,
+                    game.game_monitor_bounds.x,
+                    game.game_monitor_bounds.y,
+                    game.game_monitor_bounds.width,
+                    game.game_monitor_bounds.height
+                ));
+            } else {
+                ui.label("Target monitor: — (no game window)");
+            }
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                let pick = ui.add_enabled(!snap.picking, egui::Button::new("Pick monitor"));
+                let auto = ui.button("Back to auto");
+                let exit = ui.button("Exit");
+                if pick.clicked() {
+                    let _ = self.cmd_tx.send(UiCommand::StartPicker);
+                }
+                if auto.clicked() {
+                    let _ = self.cmd_tx.send(UiCommand::BackToAuto);
+                }
+                if exit.clicked() {
+                    // The cursor clip is global Windows state that survives
+                    // process death (user story 20), so clear it before
+                    // exiting.
+                    win32::clear_clip();
+                    std::process::exit(0);
+                }
+            });
         });
 
         // Live-updates: repaint on the poll cadence even without input.
@@ -142,8 +200,9 @@ fn foreground_label(snap: &core::LockSnapshot) -> String {
 }
 
 /// Drain tray events on the UI thread: left-click opens the on-demand window;
-/// the menu items are commands.
-fn drain_tray_events(ctx: &egui::Context) {
+/// the menu items are commands (`pick` / `auto` are forwarded to the poll
+/// thread, which applies them to the brain).
+fn drain_tray_events(ctx: &egui::Context, cmd_tx: &mpsc::Sender<UiCommand>) {
     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
         if let TrayIconEvent::Click {
             button: MouseButton::Left,
@@ -156,6 +215,12 @@ fn drain_tray_events(ctx: &egui::Context) {
     while let Ok(event) = MenuEvent::receiver().try_recv() {
         match event.id.0.as_str() {
             "open" => ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true)),
+            "pick" => {
+                let _ = cmd_tx.send(UiCommand::StartPicker);
+            }
+            "auto" => {
+                let _ = cmd_tx.send(UiCommand::BackToAuto);
+            }
             "exit" => {
                 // The cursor clip is global Windows state that survives
                 // process death (user story 20), so clear it before exiting.
