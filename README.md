@@ -4,6 +4,12 @@ Keeps your mouse on one monitor while you play, whether the game is borderless, 
 
 Multi-monitor players know the problem: you flick the mouse at the edge of a game and the cursor lands on your second screen, and your next click defocuses the game. Monitor Lock confines the cursor to the game's monitor while the game is focused, and lets go the moment you leave.
 
+## Download
+
+Get `monitor-lock.exe` from the [Releases page](https://github.com/OnlyHelion/monitor-lock/releases) and run it. It is a single file: no installer, and nothing else to install.
+
+Windows may show "Windows protected your PC" because the exe is not code-signed. Choose **More info**, then **Run anyway**. The exe also uses a low-level mouse hook, which some antivirus tools flag. Each release lists a SHA-256 checksum so you can check the file you downloaded.
+
 ## How it works
 
 Monitor Lock lives in the system tray and has two modes.
