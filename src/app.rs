@@ -15,16 +15,14 @@ use crate::seam::Rect;
 use crate::win32;
 
 /// The two pre-built tray icons: one per Lock state, swapped on state change
-/// so the state is visible at a glance (user story 14). The window icon
-/// swaps along with them.
+/// so the state is visible at a glance (user story 14). The window's icons
+/// swap along with them (`win32::set_main_window_icon`).
 pub struct TrayIcons {
     /// Engaged: amber screen with a padlock — the cursor is confined to the
     /// Game monitor.
     pub engaged: Icon,
     /// Released: dark gray screen — the cursor is free on all monitors.
     pub released: Icon,
-    pub window_engaged: Arc<egui::IconData>,
-    pub window_released: Arc<egui::IconData>,
 }
 
 impl TrayIcons {
@@ -32,8 +30,6 @@ impl TrayIcons {
         Self {
             engaged: tray_icon(true),
             released: tray_icon(false),
-            window_engaged: Arc::new(window_icon(true)),
-            window_released: Arc::new(window_icon(false)),
         }
     }
 }
@@ -99,13 +95,13 @@ impl eframe::App for MonitorLockApp {
         // Lock-state changes reported by the poll thread: swap the tray and
         // window icons.
         while let Ok(engaged) = self.state_rx.try_recv() {
-            let (icon, window) = if engaged {
-                (self.icons.engaged.clone(), self.icons.window_engaged.clone())
+            let icon = if engaged {
+                self.icons.engaged.clone()
             } else {
-                (self.icons.released.clone(), self.icons.window_released.clone())
+                self.icons.released.clone()
             };
             let _ = self.tray.set_icon(Some(icon));
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Icon(Some(window)));
+            win32::set_main_window_icon(engaged);
         }
 
         let snap = self.shared.lock().unwrap().clone();
@@ -301,8 +297,9 @@ fn tray_icon(engaged: bool) -> Icon {
     Icon::from_rgba(icon::rgba(32, engaged), 32, 32).expect("a 32x32 RGBA buffer is a valid icon")
 }
 
-/// The window's icon (title bar, taskbar, Alt+Tab) for one Lock state. Without
-/// one, eframe shows its own default (the egui logo).
+/// The window's startup icon (released art). Without one, eframe shows its
+/// own default (the egui logo). Later swaps go through
+/// `win32::set_main_window_icon`, which also sets the taskbar's big icon.
 pub fn window_icon(engaged: bool) -> egui::IconData {
     egui::IconData {
         rgba: icon::rgba(64, engaged),

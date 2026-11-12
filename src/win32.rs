@@ -9,6 +9,7 @@
 
 use crate::seam::{MonitorInfo, Point, Rect, SystemAccess, WindowInfo};
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -22,12 +23,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, ClipCursor, DispatchMessageW, EnumWindows, GA_ROOT, GetAncestor, GetClassNameW,
+    CallNextHookEx, ClipCursor, CreateIcon, DispatchMessageW, EnumWindows, GA_ROOT, GetAncestor, GetClassNameW,
     GetClipCursor, GetCursorPos, GetForegroundWindow, GetMessageW, GetShellWindow,
-    GetSystemMetrics, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, MSG, MSLLHOOKSTRUCT,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_HIDE,
-    SW_SHOWNORMAL, SetCursorPos, SetForegroundWindow, SetWindowsHookExW, ShowWindow,
-    TranslateMessage, WH_MOUSE_LL, WM_MOUSEMOVE, WindowFromPoint,
+    GetSystemMetrics, GetWindowRect, HICON, ICON_BIG, ICON_SMALL, GetWindowTextW, GetWindowThreadProcessId, MSG, MSLLHOOKSTRUCT,
+    SM_CXICON, SM_CXSMICON, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_HIDE,
+    SW_SHOWNORMAL, SendMessageW, SetCursorPos, SetForegroundWindow, SetWindowsHookExW, ShowWindow,
+    TranslateMessage, WH_MOUSE_LL, WM_MOUSEMOVE, WM_SETICON, WindowFromPoint,
 };
 
 /// Release any cursor clip. `ClipCursor(NULL)` is the Win32 way: there is no
@@ -357,6 +358,67 @@ pub fn hide_main_window() {
 }
 
 fn set_main_window_visible(visible: bool) {
+    let Some(hwnd) = find_main_window() else {
+        return;
+    };
+    unsafe {
+        if visible {
+            let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+            let _ = SetForegroundWindow(hwnd);
+        } else {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
+/// Set the window's icons for one Lock state: both the small one (title
+/// bar) and the big one (taskbar, Alt+Tab). eframe's `ViewportCommand::Icon`
+/// cannot do this: winit's `set_window_icon` sets only the small icon, so the
+/// taskbar kept the startup icon (user report, v0.1.2).
+pub fn set_main_window_icon(engaged: bool) {
+    // One (small, big) HICON pair per state, created once and kept for the
+    // process's lifetime. Stored as isize: HICON is not Send/Sync.
+    static ICONS: OnceLock<[(isize, isize); 2]> = OnceLock::new();
+    let icons = ICONS.get_or_init(|| {
+        let pair = |engaged: bool| {
+            let small = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16) as u32;
+            let big = unsafe { GetSystemMetrics(SM_CXICON) }.max(32) as u32;
+            (
+                create_icon(small, engaged).map_or(0, |h| h.0 as isize),
+                create_icon(big, engaged).map_or(0, |h| h.0 as isize),
+            )
+        };
+        [pair(false), pair(true)]
+    });
+    let (small, big) = icons[usize::from(engaged)];
+    let Some(hwnd) = find_main_window() else {
+        return;
+    };
+    for (kind, icon) in [(ICON_SMALL, small), (ICON_BIG, big)] {
+        if icon != 0 {
+            unsafe {
+                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon)));
+            }
+        }
+    }
+}
+
+/// An HICON of the app icon (`icon::rgba`) at `size` x `size`: 32bpp BGRA
+/// color with alpha, plus an all-zero AND mask (alpha does the masking).
+fn create_icon(size: u32, engaged: bool) -> Option<HICON> {
+    let mut bgra = crate::icon::rgba(size, engaged);
+    for px in bgra.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    // 1bpp mask rows are WORD-aligned.
+    let mask = vec![0u8; (size.div_ceil(16) * 2 * size) as usize];
+    unsafe {
+        CreateIcon(None, size as i32, size as i32, 1, 32, mask.as_ptr(), bgra.as_ptr()).ok()
+    }
+}
+
+/// This process's "Monitor Lock" window (the egui window), if it exists.
+fn find_main_window() -> Option<HWND> {
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -372,15 +434,8 @@ fn set_main_window_visible(visible: bool) {
     let mut found = HWND::default();
     unsafe {
         let _ = EnumWindows(Some(visit), LPARAM(&mut found as *mut HWND as isize));
-        if !found.is_invalid() {
-            if visible {
-                let _ = ShowWindow(found, SW_SHOWNORMAL);
-                let _ = SetForegroundWindow(found);
-            } else {
-                let _ = ShowWindow(found, SW_HIDE);
-            }
-        }
     }
+    (!found.is_invalid()).then_some(found)
 }
 
 /// IN — a mouse button (left, right or middle) is down, or was pressed since
@@ -527,6 +582,20 @@ mod tests {
     /// out everything downstream (the fills-monitor rule, the picker's
     /// hover, and pinning). The brain is unit-tested with a fake system;
     /// this is the one guard on the real IN path.
+    /// The window icon swap (taskbar + title bar) needs real HICONs; a bad
+    /// buffer or mask size makes CreateIcon fail and the swap silently skips.
+    #[test]
+    fn real_system_creates_window_icons_for_both_states() {
+        for size in [16, 32, 48] {
+            for engaged in [false, true] {
+                assert!(
+                    super::create_icon(size, engaged).is_some(),
+                    "CreateIcon failed at {size}px (engaged: {engaged})"
+                );
+            }
+        }
+    }
+
     #[test]
     fn real_system_reports_at_least_one_monitor() {
         let sys = super::Win32System;
