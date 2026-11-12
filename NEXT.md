@@ -1,34 +1,19 @@
-# NEXT.md — Monitor Lock
-
-## State now
-- Project: K:\monitor-lock (git; public github.com/OnlyHelion/monitor-lock). Branch `implement/spec-1-monitor-lock`.
-- #5 hand-check FAILED on the 10:10 exe (user 09:43/09:45: nothing activates; ~09:5x: UnClipCursor panic in log; 10:1x: over-engagement on browser + desktop background). THREE root causes, ALL fixed + verified (real-seam tests red→green, `cargo test` 49/49):
-  1. `monitors()` passed the Vec's BUFFER to the `EnumDisplayMonitors` callback → monitor list always empty (commit bf3cacf).
-  2. `UnClipCursor` absent by name from this machine's user32.dll → startup panic killed the poll thread; `release_clip()` now falls back to ClipCursor(whole virtual screen) (commit dfa7e32).
-  3. Over-engagement (DIAGNOSIS-3): desktop = Progman + all its children span the whole virtual screen → `is_desktop()` filter (GetAncestor(GA_ROOT) == shell) in win32.rs; a real maximized Edge measures 97.22% of M1 → FILL_THRESHOLD 0.97→0.98 in core.rs (commit 248f80d).
-- SPEC CHANGE (user 12 Nov, grill): pin mode is click-driven, replacing PIN-FORCE (commit 5c09995). Rules in the `core.rs` module doc. Any focus change from the locked window suspends the lock (pin stays armed); focus alone never re-locks in pin mode; a click INSIDE the pinned monitor re-engages on any real window; a click OUTSIDE while suspended drops the pin and auto decides in the same tick; the pick click engages at once. Shell UI (desktop, taskbar, Start, Alt+Tab switcher; class list `is_shell_ui_class` in win32.rs) = "no real foreground window". Auto mode: focused filling window re-locks with no click. Clicks on the app's own windows are ignored.
-- UNCOMMITTED, UNPUSHED: core.rs, seam.rs (`mouse_button_down`), fake.rs, win32.rs, app.rs (suspended-pin text), this file. 60/60 tests; release exe 12:05 `targetelease\monitor-lock.exe`. No exe run, no in-game test yet.
-
-- UNVERIFIED FIX (user 12 Nov: GUI said 'Lock: engaged' while the cursor was free): hypothesis = Windows or another app released the clip behind the Lock's back. Brain now compares `SystemAccess::cursor_clip()` with its target every tick while engaged and re-applies; window shows 'Clip re-applied N time(s)' when it happens (confirms the hypothesis). 62/62 tests. Release exe rebuilt 12:19 (with this fix); not yet run by the user.
-
-- BLEED REPORT (user 12 Nov, pinned, browser focused): the cursor escaped the pinned monitor ONLY along the horizontal band where the Monitor Lock GUI window sat (and freely when the GUI straddled the seam); 'Clip re-applied' N rose while the GUI said engaged; GUI not focused. Raw ClipCursor holds under 4000 px jumps (tested), so something releases the clip near the GUI window; root cause UNKNOWN (winit refresh_os_cursor only clips when our window is active, so not it if truly unfocused). Mitigation built (64/64 tests): no clear-first in set_cursor_clip (ClipCursor replaces; the clear opened a leak window), `guard_clip` every 10 ms in main.rs, GUI shows the last foreign clip rect. Next: user re-test; if it still bleeds near the GUI, read 'last: x,y WxH' (0,0 4480x1440 = cleared by someone).
-
-- BLEED CAUSE (user 12 Nov, 'N goes up the second the mouse hovers the GUI'): hovering the Monitor Lock window makes the window toolkit change the clip (suspected winit `refresh_os_cursor`, not proven). Workaround built 12:45: closing the window (X) now hides it to the tray instead of quitting (CancelClose + Win32 SW_HIDE, `win32::hide_main_window`); tray left-click / Open re-shows it via Win32 (`show_main_window`); tray menu runs as event handlers (`app::install_tray_handlers`) so it works while hidden. Tested by script: close keeps the process alive, tray click reopens, repeatable. Window still starts visible. Real fix for hover (not done): stop the toolkit touching the clip while the window is visible.
-
-- LEAK IN STAR CITIZEN + MAGPIE (user 12 Nov): GUI showed 'Clip re-applied 2138 time(s) (last: 0,0 4480x1440)': another program (game or Magpie) resets the clip to the whole virtual screen over and over, and the cursor leaks between our re-applies. Fix built 12:5x (66/66 tests): a low-level mouse hook (`win32::start_mouse_guard`, armed/disarmed by set/clear clip) clamps every mouse move outside the target monitor back inside, whatever the clip is. Real-seam test sweeps the real cursor with the clip released: fails without the hook (cursor reaches x=4479), passes with it. UNVERIFIED in the game: Magpie also moves the cursor and may fight the clamp. Release build has no console; panics go to `monitor-lock-panic.log` beside the exe and also release the guard.
-
-- User 12 Nov: mouse guard works in Star Citizen + Magpie; the 'Clip re-applied' N keeps growing (another program resets the clip). Not harmful now; code changed (66/66): re-apply back to once per 100 ms tick (the 10 ms slices removed), GUI line reworded. Release exe rebuilt 13:03 with this change; not yet run.
-
-- RELEASED 12 Nov 2026: v0.1.0 is live (https://github.com/OnlyHelion/monitor-lock/releases/tag/v0.1.0), built by the `Release` workflow when a `v*` tag is pushed; PR #6 merged into master. Tracker aligned: #1-#5 closed with verdict comments; open follow-ups live in #7. Assets: monitor-lock.exe (static CRT) + .sha256; downloaded copy verified (checksum matches, starts, no panic log). Next release: bump nothing, push a new tag `vX.Y.Z` on master. GUI trimmed (collapsed Details), `ClipCursor(None)` replaces the UnClipCursor shim, README + GLOSSARY updated, clippy/fmt clean.
+# NEXT — Monitor Lock
+Updated: 2026-11-12 14:05 · Claude Code · ab664ea clean (master)
 
 ## Next step
-1. User hand-check on the 12:05 exe: pin a monitor, Alt+Tab (lock must free the cursor; the Alt+Tab class is UNVERIFIED on this Win11 build: if it still holds, read the foreground class during Alt+Tab, add it to `is_shell_ui_class`); click inside the pinned monitor re-locks; click on another monitor drops the pin; auto with a borderless game.
-2. Then commit + push, post the rules on issue #1 (comment posted on #1, 12 Nov), close #5 on user confirmation.
-3. Known limit: opening the tray menu by clicking the tray icon counts as a click outside the pinned monitor (if the tray is on another monitor) and drops the pin.
+Nothing open. Next release: push a new tag `vX.Y.Z` on master (the `Release` workflow builds and publishes monitor-lock.exe).
 
-## Watch items
-- A click on the on-demand window during the picker also counts as the global pin click; border fixed at 5 physical px.
-- No PC shutdown while the user is testing (the 01:22 permission is superseded).
-- UNTESTED-VISUAL (still): tray icon rendering, window display (now includes the pin-mode hint line), overlay ring, picker feel, real clip, pin-force in real use — user validating on the new exe.
-- If the user is testing, the exe is locked: ask them to Exit before any `cargo build --release`.
-- The tree is NOT `cargo fmt`-clean (app.rs/core.rs/main.rs/overlay.rs/seam.rs reformat under the current rustfmt; left as-is — don't drag into fix commits).
+## State now
+- master at ab664ea, working tree clean (git status).
+- v0.1.0 is the latest GitHub release, published 2026-11-12 (gh release list).
+- No open issues; #7 "Follow-ups after v0.1.0" is closed (gh issue list / view).
+- Cleaned 2026-11-12: only branch is master (local + origin); merged branches deleted; `cargo clean` run (no `target/` until the next build); empty `.worktrees/` removed (git branch -a, ls).
+- UNVERIFIED: pin-mode Alt+Tab release on this Win11 build; if Alt+Tab still holds the lock, read the foreground class during Alt+Tab and add it to `is_shell_ui_class` (src/win32.rs).
+
+## Don't retry
+- Hovering the Monitor Lock window changes the clip (suspected winit); the workaround is closing to the tray. Details in the ledger.
+
+## Pointers
+- docs/ledgers/monitor-lock.md (full history of the fixes and user reports)
+- Pin/auto rules: module doc in src/core.rs
