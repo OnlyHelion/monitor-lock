@@ -13,9 +13,9 @@
 // installs a hook that writes it to `monitor-lock-panic.log` next to the exe.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod core;
 #[cfg(test)]
 mod fake;
-mod core;
 mod seam;
 #[cfg(windows)]
 mod win32;
@@ -35,8 +35,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(std::env::temp_dir);
-        let line = format!("{:?}: {}
-", std::time::SystemTime::now(), info);
+        let line = format!(
+            "{:?}: {}
+",
+            std::time::SystemTime::now(),
+            info
+        );
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -170,12 +174,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // working while the window is hidden.
             app::install_tray_handlers(cc.egui_ctx.clone(), cmd_tx.clone());
             Ok(Box::new(app::MonitorLockApp {
-            shared,
-            tray,
-            icons,
-            state_rx,
-            cmd_tx,
-        }) as _)
+                shared,
+                tray,
+                icons,
+                state_rx,
+                cmd_tx,
+            }) as _)
         }),
     )?;
     Ok(())

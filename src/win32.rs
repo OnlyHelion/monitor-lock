@@ -22,12 +22,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    ClipCursor, GA_ROOT, GetClipCursor, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetShellWindow,
-    GetSystemMetrics, GetWindowRect, GetWindowTextW, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos, WindowFromPoint,
-    GetWindowThreadProcessId, EnumWindows, SetForegroundWindow, ShowWindow, SW_HIDE, SW_SHOWNORMAL,
-    CallNextHookEx, DispatchMessageW, GetMessageW, MSG, MSLLHOOKSTRUCT, SetWindowsHookExW,
-    TranslateMessage, WH_MOUSE_LL, WM_MOUSEMOVE,
+    CallNextHookEx, ClipCursor, DispatchMessageW, EnumWindows, GA_ROOT, GetAncestor, GetClassNameW,
+    GetClipCursor, GetCursorPos, GetForegroundWindow, GetMessageW, GetShellWindow,
+    GetSystemMetrics, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, MSG, MSLLHOOKSTRUCT,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_HIDE,
+    SW_SHOWNORMAL, SetCursorPos, SetForegroundWindow, SetWindowsHookExW, ShowWindow,
+    TranslateMessage, WH_MOUSE_LL, WM_MOUSEMOVE, WindowFromPoint,
 };
 
 /// Release any cursor clip. `ClipCursor(NULL)` is the Win32 way: there is no
@@ -478,10 +478,19 @@ mod tests {
     fn guard_clamp_pulls_a_move_back_inside_and_leaves_inside_moves_alone() {
         // Monitor 0,0 2560x1440: right and bottom are exclusive.
         assert_eq!(super::guard_clamp(100, 100, 0, 0, 2560, 1440), None);
-        assert_eq!(super::guard_clamp(2560, 700, 0, 0, 2560, 1440), Some((2559, 700)));
-        assert_eq!(super::guard_clamp(3500, -40, 0, 0, 2560, 1440), Some((2559, 0)));
+        assert_eq!(
+            super::guard_clamp(2560, 700, 0, 0, 2560, 1440),
+            Some((2559, 700))
+        );
+        assert_eq!(
+            super::guard_clamp(3500, -40, 0, 0, 2560, 1440),
+            Some((2559, 0))
+        );
         // A monitor with negative coordinates.
-        assert_eq!(super::guard_clamp(-1930, 500, -1920, 0, 0, 1080), Some((-1920, 500)));
+        assert_eq!(
+            super::guard_clamp(-1930, 500, -1920, 0, 0, 1080),
+            Some((-1920, 500))
+        );
         // A degenerate rect never traps the cursor.
         assert_eq!(super::guard_clamp(5, 5, 10, 10, 10, 10), None);
     }
@@ -556,8 +565,15 @@ mod tests {
         // on that side the cursor would escape without the guard. A single
         // monitor makes the test vacuous, so it is skipped.
         let monitors = sys.monitors();
-        let m = monitors.iter().min_by_key(|m| m.bounds.x).expect("a monitor").clone();
-        if !monitors.iter().any(|o| o.bounds.x >= m.bounds.x + m.bounds.width) {
+        let m = monitors
+            .iter()
+            .min_by_key(|m| m.bounds.x)
+            .expect("a monitor")
+            .clone();
+        if !monitors
+            .iter()
+            .any(|o| o.bounds.x >= m.bounds.x + m.bounds.width)
+        {
             return;
         }
         let before = sys.cursor_position();
@@ -619,7 +635,10 @@ mod tests {
             "the shell window (Progman) itself must be filtered as desktop"
         );
 
-        let counter = Box::new(Counter { children: 0, unfiltered: 0 });
+        let counter = Box::new(Counter {
+            children: 0,
+            unfiltered: 0,
+        });
         let ptr = Box::into_raw(counter);
         unsafe {
             let _ = EnumChildWindows(Some(shell), Some(count_shell_child), LPARAM(ptr as isize));

@@ -124,7 +124,12 @@ impl SystemAccess for FakeSystem {
     }
 
     fn cursor_clip(&self) -> Rect {
-        self.clip.unwrap_or(Rect { x: 0, y: 0, width: 100_000, height: 100_000 })
+        self.clip.unwrap_or(Rect {
+            x: 0,
+            y: 0,
+            width: 100_000,
+            height: 100_000,
+        })
     }
 
     fn set_cursor_clip(&mut self, rect: Rect) {

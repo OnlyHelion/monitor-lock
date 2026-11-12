@@ -52,8 +52,7 @@ pub fn create_tray(initial_icon: &Icon) -> Result<TrayIcon, tray_icon::Error> {
     let auto = MenuItem::with_id("auto", "Back to auto", true, None);
     let exit = MenuItem::with_id("exit", "Exit", true, None);
     let menu = Menu::new();
-    menu
-        .append_items(&[&open, &pick, &auto, &exit])
+    menu.append_items(&[&open, &pick, &auto, &exit])
         .expect("static menu items always append");
     TrayIconBuilder::new()
         .with_icon(initial_icon.clone())
@@ -243,7 +242,10 @@ fn game_window_label(snap: &core::LockSnapshot) -> String {
 
 /// One monitor's id and FULL bounds (x, y, w, h) for the on-demand window.
 fn format_monitor(id: &str, bounds: &Rect) -> String {
-    format!("{}  ({}, {}) {}x{}", id, bounds.x, bounds.y, bounds.width, bounds.height)
+    format!(
+        "{}  ({}, {}) {}x{}",
+        id, bounds.x, bounds.y, bounds.width, bounds.height
+    )
 }
 
 /// Install the tray and menu event handlers. They run as soon as an event
@@ -271,18 +273,16 @@ pub fn install_tray_handlers(ctx: egui::Context, cmd_tx: mpsc::Sender<UiCommand>
             }
         }));
     }
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        match event.id.0.as_str() {
-            "open" => show(),
-            "pick" => {
-                let _ = cmd_tx.send(UiCommand::StartPicker);
-            }
-            "auto" => {
-                let _ = cmd_tx.send(UiCommand::BackToAuto);
-            }
-            "exit" => exit_app(),
-            _ => {}
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.0.as_str() {
+        "open" => show(),
+        "pick" => {
+            let _ = cmd_tx.send(UiCommand::StartPicker);
         }
+        "auto" => {
+            let _ = cmd_tx.send(UiCommand::BackToAuto);
+        }
+        "exit" => exit_app(),
+        _ => {}
     }));
 }
 

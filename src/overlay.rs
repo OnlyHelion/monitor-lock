@@ -11,18 +11,18 @@
 //! Thin layer — no unit tests; verified by the user's in-game hand-check
 //! (ticket #5).
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BLENDFUNCTION,
-    BITMAPINFO, BITMAPINFOHEADER, AC_SRC_ALPHA, AC_SRC_OVER, DIB_RGB_COLORS, HGDIOBJ,
+    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
+    CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, HGDIOBJ, SelectObject,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetWindowPos,
-    UpdateLayeredWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, ULW_ALPHA, WS_EX_LAYERED,
-    WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_TOPMOST, RegisterClassW, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetWindowPos, ULW_ALPHA, UpdateLayeredWindow, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
+use windows::core::PCWSTR;
 
 use crate::seam::Rect;
 
@@ -95,7 +95,12 @@ impl PickerOverlay {
 /// The overlay's WndProc: nothing to handle — the window never takes focus
 /// (WS_POPUP + WS_EX_TOOLWINDOW + SWP_NOACTIVATE) and is painted directly by
 /// UpdateLayeredWindow, so no message pump is required.
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -104,7 +109,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 fn ensure_class() {
     CLASS_REGISTERED.call_once(|| unsafe {
         let name = wide(CLASS_NAME);
-        let instance = GetModuleHandleW(None).expect("the module handle is valid in a running process");
+        let instance =
+            GetModuleHandleW(None).expect("the module handle is valid in a running process");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(wnd_proc),
             hInstance: instance.into(),
@@ -121,8 +127,8 @@ fn create(bounds: &Rect) -> HWND {
     ensure_class();
     let class_name = wide(CLASS_NAME);
     unsafe {
-        let instance = GetModuleHandleW(None)
-            .expect("the module handle is valid in a running process");
+        let instance =
+            GetModuleHandleW(None).expect("the module handle is valid in a running process");
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             PCWSTR(class_name.as_ptr()),

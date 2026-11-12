@@ -54,10 +54,7 @@ impl Rect {
     /// True when the point is inside this rect. The right and bottom edges
     /// are exclusive: a point exactly on them is outside.
     pub fn contains(&self, p: Point) -> bool {
-        p.x >= self.x
-            && p.x < self.x + self.width
-            && p.y >= self.y
-            && p.y < self.y + self.height
+        p.x >= self.x && p.x < self.x + self.width && p.y >= self.y && p.y < self.y + self.height
     }
 
     /// The center of the rect (integer division). Virtual-screen math:

@@ -198,13 +198,14 @@ impl LockCore {
         let monitors = sys.monitors();
         let foreground = sys.foreground_window();
         let game_window = foreground.as_ref().and_then(|window| {
-            filled_monitor(&monitors, window, self.threshold)
-                .map(|game_monitor| DetectedGameWindow {
+            filled_monitor(&monitors, window, self.threshold).map(|game_monitor| {
+                DetectedGameWindow {
                     identity: window.identity,
                     title: window.title.clone(),
                     game_monitor_id: game_monitor.monitor_id,
                     game_monitor_bounds: game_monitor.monitor_bounds,
-                })
+                }
+            })
         });
 
         // The Monitor override, resolved against this tick's monitors: the
@@ -225,10 +226,7 @@ impl LockCore {
             // machine is suspended. Track the monitor under the cursor so
             // the thin layer knows which monitor to outline.
             let cursor = sys.cursor_position();
-            let picker_hover = monitors
-                .iter()
-                .find(|m| m.bounds.contains(cursor))
-                .cloned();
+            let picker_hover = monitors.iter().find(|m| m.bounds.contains(cursor)).cloned();
             if matches!(self.lock, LockState::Engaged { .. }) {
                 // Defensive: start_picker already released the Lock.
                 sys.clear_cursor_clip();
@@ -348,8 +346,9 @@ impl LockCore {
                     .map(|t| *monitor_bounds != t.monitor_bounds)
                     .unwrap_or(false) =>
             {
-                let target =
-                    target.clone().expect("the target is set while a Game window is foreground");
+                let target = target
+                    .clone()
+                    .expect("the target is set while a Game window is foreground");
                 sys.set_cursor_clip(target.monitor_bounds);
                 Self::recenter_if_outside(sys, target.monitor_bounds);
                 self.lock = LockState::Engaged {
@@ -553,9 +552,7 @@ pub fn filled_monitor(
             .map(|r| r.area() as f64)
             .unwrap_or(0.0);
         let fraction = covered / monitor_area as f64;
-        if fraction >= threshold
-            && best.as_ref().map(|(f, _)| fraction > *f).unwrap_or(true)
-        {
+        if fraction >= threshold && best.as_ref().map(|(f, _)| fraction > *f).unwrap_or(true) {
             best = Some((
                 fraction,
                 MonitorTarget {
@@ -683,7 +680,9 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
             "a window slightly larger than its monitor still fills it"
         );
@@ -698,13 +697,20 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
             "a window covering the monitor's full bounds is a Game window"
         );
         assert_eq!(
             snap.game_window.as_ref().map(|g| g.game_monitor_bounds),
-            Some(Rect { x: 0, y: 0, width: 1920, height: 1080 }),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080
+            }),
             "the Game monitor is the one the window fills"
         );
     }
@@ -734,7 +740,9 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
             "98.1% of the full bounds is just over the threshold"
         );
@@ -750,7 +758,9 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
             "exactly at the threshold counts (at-least semantics)"
         );
@@ -787,13 +797,20 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
             "the Game monitor is the one the window fills best"
         );
         assert_eq!(
             snap.game_window.as_ref().map(|g| g.game_monitor_bounds),
-            Some(Rect { x: 0, y: 0, width: 1000, height: 1000 })
+            Some(Rect {
+                x: 0,
+                y: 0,
+                width: 1000,
+                height: 1000
+            })
         );
     }
 
@@ -810,13 +827,20 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m1"),
             "negative-coordinate geometry: the window fills the left monitor"
         );
         assert_eq!(
             snap.game_window.as_ref().map(|g| g.game_monitor_bounds),
-            Some(Rect { x: -1920, y: 0, width: 1920, height: 1080 })
+            Some(Rect {
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080
+            })
         );
     }
 
@@ -833,7 +857,9 @@ mod tests {
         let snap = observe(&mut fake);
 
         assert_eq!(
-            snap.game_window.as_ref().map(|g| g.game_monitor_id.as_str()),
+            snap.game_window
+                .as_ref()
+                .map(|g| g.game_monitor_id.as_str()),
             Some("m2"),
             "picks the monitor the window fills, not the first one enumerated"
         );
@@ -864,10 +890,24 @@ mod tests {
 
         let snap = observe(&mut fake);
 
-        assert_eq!(snap.monitors.len(), 2, "monitor list (count + bounds) is carried");
-        assert_eq!(snap.monitors[1].bounds, Rect { x: 1920, y: 0, width: 2560, height: 1440 });
         assert_eq!(
-            snap.foreground.as_ref().map(|w| (w.identity, w.title.as_str())),
+            snap.monitors.len(),
+            2,
+            "monitor list (count + bounds) is carried"
+        );
+        assert_eq!(
+            snap.monitors[1].bounds,
+            Rect {
+                x: 1920,
+                y: 0,
+                width: 2560,
+                height: 1440
+            }
+        );
+        assert_eq!(
+            snap.foreground
+                .as_ref()
+                .map(|w| (w.identity, w.title.as_str())),
             Some((7, "Game")),
             "the foreground window (identity + title) is carried"
         );
@@ -889,7 +929,12 @@ mod tests {
         window(identity, "Game", 0, 0, 1920, 1080)
     }
 
-    const M1: Rect = Rect { x: 0, y: 0, width: 1920, height: 1080 };
+    const M1: Rect = Rect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+    };
 
     /// A browser window that fills the work area of m1 — just under the
     /// fills-monitor threshold, so never a Game window.
@@ -1085,7 +1130,12 @@ mod tests {
             vec![
                 Action::ClipSet(M1),
                 Action::ClipClear,
-                Action::ClipSet(Rect { x: 1920, y: 0, width: 2560, height: 1440 }),
+                Action::ClipSet(Rect {
+                    x: 1920,
+                    y: 0,
+                    width: 2560,
+                    height: 1440
+                }),
                 // The cursor (on m1, outside the new target) is re-centered
                 // on m2.
                 Action::CursorMove(Point { x: 3200, y: 720 }),
@@ -1162,7 +1212,12 @@ mod tests {
         assert!(matches!(snap.lock, LockState::Engaged { .. }));
         assert_eq!(
             fake.clip_sets(),
-            vec![Rect { x: -1920, y: 0, width: 1920, height: 1080 }],
+            vec![Rect {
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080
+            }],
             "the clip is the Game monitor's FULL bounds (negative x)"
         );
         assert_eq!(
@@ -1282,7 +1337,15 @@ mod tests {
         );
         assert_eq!(
             fake.clip_sets(),
-            vec![M1, Rect { x: 1920, y: 0, width: 2560, height: 1440 }],
+            vec![
+                M1,
+                Rect {
+                    x: 1920,
+                    y: 0,
+                    width: 2560,
+                    height: 1440
+                }
+            ],
             "the clip is re-set to the new Game monitor"
         );
         assert_eq!(
@@ -1300,7 +1363,12 @@ mod tests {
     // --- Monitor picker + Monitor override (ticket #4) ---
 
     /// The picker tests' m2 (the monitor the user pins), full bounds.
-    const M2: Rect = Rect { x: 1920, y: 0, width: 2560, height: 1440 };
+    const M2: Rect = Rect {
+        x: 1920,
+        y: 0,
+        width: 2560,
+        height: 1440,
+    };
 
     #[test]
     fn start_picker_frees_the_cursor_and_releases_the_lock() {
@@ -1315,7 +1383,10 @@ mod tests {
         brain.start_picker(&mut fake);
         let snap = brain.update(&mut fake);
 
-        assert!(snap.picking, "the picker is active after the explicit start");
+        assert!(
+            snap.picking,
+            "the picker is active after the explicit start"
+        );
         assert_eq!(
             fake.effective_clip(),
             None,
@@ -1344,7 +1415,10 @@ mod tests {
         // Game window is foreground.
         for _ in 0..3 {
             let snap = brain.update(&mut fake);
-            assert!(!snap.picking, "the picker starts only explicitly, never accidentally");
+            assert!(
+                !snap.picking,
+                "the picker starts only explicitly, never accidentally"
+            );
         }
 
         brain.start_picker(&mut fake);
@@ -1538,7 +1612,11 @@ mod tests {
             ),
             "auto-follow resumes on the Game monitor"
         );
-        assert_eq!(fake.clip_sets(), vec![M1], "the clip targets the Game monitor");
+        assert_eq!(
+            fake.clip_sets(),
+            vec![M1],
+            "the clip targets the Game monitor"
+        );
     }
 
     #[test]
@@ -1591,7 +1669,10 @@ mod tests {
         brain.back_to_auto();
 
         let snap = brain.update(&mut fake);
-        assert!(!snap.picking, "Back to auto ends the picker without pinning");
+        assert!(
+            !snap.picking,
+            "Back to auto ends the picker without pinning"
+        );
         assert!(snap.pinned.is_none());
         assert!(
             matches!(
@@ -1646,7 +1727,12 @@ mod tests {
 
         // m2's bounds change (resolution change): the pin follows by id, and
         // the cursor (at the old m2 center) is now outside the new bounds.
-        let m2_new = Rect { x: 1920, y: 0, width: 1280, height: 720 };
+        let m2_new = Rect {
+            x: 1920,
+            y: 0,
+            width: 1280,
+            height: 720,
+        };
         fake.set_monitors(vec![
             monitor("m1", 0, 0, 1920, 1080),
             monitor("m2", 1920, 0, 1280, 720),
@@ -1715,7 +1801,10 @@ mod tests {
         brain.update(&mut fake);
         brain.confirm_picker(&mut fake);
         let snap = brain.update(&mut fake);
-        assert!(engaged_on(&snap, "m2"), "the pick click engages: no fills-monitor requirement");
+        assert!(
+            engaged_on(&snap, "m2"),
+            "the pick click engages: no fills-monitor requirement"
+        );
         assert_eq!(fake.effective_clip(), Some(M2));
     }
 
@@ -1728,8 +1817,14 @@ mod tests {
         let mut brain = LockCore::new();
         pin_m2(&mut fake, &mut brain);
         let snap = brain.update(&mut fake);
-        assert!(matches!(snap.lock, LockState::Released), "shell UI never locks");
-        assert_eq!(snap.pinned.as_ref().map(|p| p.monitor_id.as_str()), Some("m2"));
+        assert!(
+            matches!(snap.lock, LockState::Released),
+            "shell UI never locks"
+        );
+        assert_eq!(
+            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
+            Some("m2")
+        );
     }
 
     #[test]
@@ -1745,18 +1840,31 @@ mod tests {
         // The Alt+Tab switcher is shell UI: no real foreground window.
         fake.set_foreground(None);
         let snap = brain.update(&mut fake);
-        assert!(matches!(snap.lock, LockState::Released), "Alt+Tab suspends the lock");
-        assert_eq!(fake.effective_clip(), None, "the cursor is free to cross monitors");
+        assert!(
+            matches!(snap.lock, LockState::Released),
+            "Alt+Tab suspends the lock"
+        );
+        assert_eq!(
+            fake.effective_clip(),
+            None,
+            "the cursor is free to cross monitors"
+        );
 
         // The user lands back on the same window, then on another one: with
         // no click the lock stays suspended, and the pin stays armed.
         fake.set_foreground(Some(game_on_m1(100)));
         let snap = brain.update(&mut fake);
-        assert!(matches!(snap.lock, LockState::Released), "focus alone does not re-lock");
+        assert!(
+            matches!(snap.lock, LockState::Released),
+            "focus alone does not re-lock"
+        );
         fake.set_foreground(Some(maximized_browser()));
         let snap = brain.update(&mut fake);
         assert!(matches!(snap.lock, LockState::Released));
-        assert_eq!(snap.pinned.as_ref().map(|p| p.monitor_id.as_str()), Some("m2"));
+        assert_eq!(
+            snap.pinned.as_ref().map(|p| p.monitor_id.as_str()),
+            Some("m2")
+        );
     }
 
     #[test]
@@ -1774,7 +1882,10 @@ mod tests {
         // clicks inside m2.
         fake.set_foreground(Some(window(300, "Editor", 2000, 100, 800, 600)));
         let snap = click(&mut fake, &mut brain, ON_M2);
-        assert!(engaged_on(&snap, "m2"), "a click inside the pinned monitor re-engages");
+        assert!(
+            engaged_on(&snap, "m2"),
+            "a click inside the pinned monitor re-engages"
+        );
         assert_eq!(fake.effective_clip(), Some(M2));
     }
 
@@ -1812,12 +1923,21 @@ mod tests {
         // The user clicks the (non-filling) Explorer window on m1.
         fake.set_foreground(Some(maximized_browser()));
         let snap = click(&mut fake, &mut brain, ON_M1);
-        assert!(snap.pinned.is_none(), "the pin is dropped: the user is never trapped");
-        assert!(matches!(snap.lock, LockState::Released), "auto: a non-filling window does not lock");
+        assert!(
+            snap.pinned.is_none(),
+            "the pin is dropped: the user is never trapped"
+        );
+        assert!(
+            matches!(snap.lock, LockState::Released),
+            "auto: a non-filling window does not lock"
+        );
         // And it stays that way: no later tick re-engages without a Game window.
         let snap = brain.update(&mut fake);
         assert!(matches!(snap.lock, LockState::Released));
-        assert!(snap.pinned.is_none(), "the pin stays dropped on later ticks");
+        assert!(
+            snap.pinned.is_none(),
+            "the pin stays dropped on later ticks"
+        );
     }
 
     #[test]
@@ -1834,7 +1954,10 @@ mod tests {
         fake.set_foreground(Some(game_on_m1(100))); // a borderless game on m1
         let snap = click(&mut fake, &mut brain, ON_M1);
         assert!(snap.pinned.is_none());
-        assert!(engaged_on(&snap, "m1"), "auto engages on the clicked Game window in that same tick");
+        assert!(
+            engaged_on(&snap, "m1"),
+            "auto engages on the clicked Game window in that same tick"
+        );
         assert_eq!(fake.effective_clip(), Some(M1));
     }
 
@@ -1890,7 +2013,10 @@ mod tests {
         brain.update(&mut fake);
         fake.set_foreground(Some(window(301, "B", 3000, 100, 800, 600)));
         let snap = brain.update(&mut fake);
-        assert!(matches!(snap.lock, LockState::Released), "no click: stays suspended");
+        assert!(
+            matches!(snap.lock, LockState::Released),
+            "no click: stays suspended"
+        );
     }
 
     #[test]
@@ -1942,7 +2068,10 @@ mod tests {
         let mut brain = LockCore::new();
         let snap = brain.update(&mut fake);
         assert!(engaged_on(&snap, "m1"));
-        assert_eq!(snap.clip_reasserts, 0, "nothing to re-apply while the clip holds");
+        assert_eq!(
+            snap.clip_reasserts, 0,
+            "nothing to re-apply while the clip holds"
+        );
 
         fake.external_clip_clear(); // Windows or another app releases it
         let snap = brain.update(&mut fake);
@@ -1967,7 +2096,10 @@ mod tests {
         assert_eq!(fake.effective_clip(), Some(M1));
         let snap = brain.update(&mut fake);
         assert_eq!(snap.clip_reasserts, 1);
-        assert!(snap.foreign_clip.is_some(), "the foreign clip is recorded for the window");
+        assert!(
+            snap.foreign_clip.is_some(),
+            "the foreign clip is recorded for the window"
+        );
     }
 
     #[test]
