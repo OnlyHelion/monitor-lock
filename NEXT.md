@@ -1,17 +1,20 @@
 # NEXT — Monitor Lock
-Updated: 2026-11-19 · OpenCode (Qwen3.8 27B UD) · dot-matrix redesign: spec #8 + 4 tickets published (ready-for-agent) — implementation is next, start #9
+Updated: 2026-11-19 · OpenCode (Qwen3.8 27B UD) · implement-spec #8 in progress: integration branch `dot-matrix`, ticket #9 being implemented
 
 ## Next step
-1. Implement ticket #9 (pure dot-matrix module, no blockers — the frontier). Its body carries the approved prototype constants (palette, layout cells, wave formula, ring params):
-   - NEW `src/dotmatrix.rs` (pure, unit-tested): palette BG #0E0F13 / OFF #26282E / ORANGE #FFB347 / WHITE #E8E8EC / GREY #888888 / DIML #3A3D45 / SOFT #60636C; 5×7 font + padlock 18×18 solid/hollow (copy from `%TEMP%\opencode\render_v2.py` — the approved design as code); CellMap; squircle LUT renderer (ratio 0.78, n=4, ss=16); `wave_intensity` (250 ms, Rmax 140 px, σ 13, I = exp(-((d-Rt)²/2σ²))·(1-t)·(1-d/Rmax), t=progress); `ring_point`/`ring_length` (port of mockup `ring_at`).
-2. After #9 the frontier is #11 (window), #10 (picker ring), #12 (icons) — independent, parallelizable; each body has the acceptance criteria; thin layer is hand-checked by the user.
-3. Window notes (#11): egui 0.37 texture API verified (`ctx.load_texture(impl Into<String>, impl Into<ImageData>, TextureOptions) -> TextureHandle`); panel = `ui.max_rect()` × `pixels_per_point()`; pitch = round(5·ppp) clamped so 128×80 cells fit; hit-test buttons + DETAILS in cell coords; PICK disabled while picking; DETAILS toggles window 640×400 ↔ 640×640 (`ViewportCommand::Resize` in points); wave on any state-key change, 16 ms repaints during the 250 ms wave else 100 ms.
-4. Icons (#12): screen rect → 18×18 SQUARE dot panel (u 0.26–0.74, v 0.15–0.63, pitch 0.48/18, squircle ratio 0.78); engaged = solid padlock ORANGE, released = solid padlock WHITE, off-dots OFF on BG; bezel/neck/base UNCHANGED (test keeps alpha identical). Then `MONITOR_LOCK_WRITE_ICO=1 cargo test ico_file`, full `cargo test`, hand-check.
+1. Implementer subagent (session ses_e0a5474c5ffdmRADEe5Z6Uvch3) is building ticket #9 in worktree `K:\wt\monitor-lock-9` (branch `ticket/9-dotmatrix-module`, based on `dot-matrix` tip 7c78680). When it reports done:
+   - In main worktree `K:\monitor-lock` (on `dot-matrix`): `git merge --no-ff ticket/9-dotmatrix-module`; on conflict dispatch a merger subagent.
+   - Then the frontier opens: create worktrees `K:\wt\monitor-lock-10|11|12` on branches `ticket/N-...` from the `dot-matrix` tip and dispatch 3 parallel implementer subagents for #10 (picker ring), #11 (window), #12 (icons). Each ticket body has acceptance criteria + constants.
+   - After all merges: run full `cargo test` once, then the `code-review` skill on `dot-matrix`; fix issues in one implementer subagent.
+   - Report the integration branch to the user for HAND-CHECK (thin layer). Tickets stay open until the user confirms; closing is `gh issue close N --comment`. No PR (repo closes by direct master commits + v* tag, per prior releases).
+2. Merge order after #9: any order; #11 is the largest. #12 also needs `MONITOR_LOCK_WRITE_ICO=1 cargo test ico_file` then full `cargo test`.
 
 ## State now
-- SETTLED (user, quoted in ledger): scope = everything (window, tray, taskbar, exe); one shared dot grid, 5 px pitch @1x, 640×400; "real dots" = squircles (superellipse n=4, ratio 0.78); glyph = padlock 18×18; locked #FFB347, released #E8E8EC, suspended = hollow same orange; off-dots visible panel-wide; static UI + one-shot ≤300 ms = small localized orange wave from the padlock; picker ring = dotted orange + 2 chasers opposite sides (only continuous animation); short labels; status rows 2-row gap; buttons left edge = col 8 (same as heading/DETAILS).
-- Published: spec #8 (ready-for-agent); tickets #9 (module, no blockers), #11 (window), #10 (picker ring), #12 (icons) — all sub-issues of #8, ready-for-agent, blocked-by edges in body. ADR 0001 + GLOSSARY (incl. Wave) + final mockups (04/06/07/08) in docs. Code NOT yet changed (v0.1.3, f58312b).
-- Type defs: `LockState`/`LockSnapshot` core.rs:459-528; window size main.rs:167; overlay paint overlay.rs:153-228; icon geometry icon.rs:63-109; `win32::set_main_window_icon` :378.
+- Committed to master: `7c78680` docs (ADR 0001, GLOSSARY update, mockups, ledger). `dot-matrix` branch = master + (pending merges). Remote: github.com/OnlyHelion/monitor-lock.
+- Subagents launched: explorer (ses_e0a5474c5ffeTX3PJYoYMEt7wh) → notes to `%TEMP%\opencode\ml-exploration\NOTES.md` (briefs for #10/#11/#12); implementer #9 (ses_e0a5474c5ffdmRADEe5Z6Uvch3).
+- SETTLED (user, quoted in ledger): scope = everything; one shared dot grid, 5 px pitch @1x, 640×400; squircles (n=4, ratio 0.78); padlock 18×18; locked #FFB347 / released #E8E8EC / suspended = hollow orange; off-dots visible panel-wide; static UI + one-shot ≤300 ms orange wave from padlock on state-key change; picker ring = dotted orange + 2 chasers opposite sides (only continuous animation); short labels; status rows 2-row gap; buttons left edge = col 8.
+- Tickets: #9 no blockers (frontier, in progress); #10/#11/#12 blocked by #9. All sub-issues of spec #8, ready-for-agent.
+- Type defs: `LockState`/`LockSnapshot` core.rs:459-528; window size main.rs:167; overlay paint overlay.rs:153-228; icon geometry icon.rs:63-109; `win32::set_main_window_icon` :378. Renderer source of constants: `%TEMP%\opencode\render_v2.py`.
 - UNVERIFIED (carried): pin-mode Alt+Tab release on this Win11 build; if Alt+Tab holds the lock, add the foreground class to `is_shell_ui_class` (src/win32.rs).
 
 ## Don't retry
@@ -21,4 +24,4 @@ Updated: 2026-11-19 · OpenCode (Qwen3.8 27B UD) · dot-matrix redesign: spec #8
 - `#` in .rc files (RC1021) — use /* */. ICO count is at byte offset 4.
 
 ## Pointers
-- `docs/design/dot-matrix/` (refs, 04-real-dot-shape.png, README, mockups); `docs/ledgers/monitor-lock.md` (top section: Dot-matrix redesign, all rounds quoted); renderer `%TEMP%\opencode\render_v2.py` (re-runnable, carries every layout constant); release: push a v* tag.
+- Spec/tickets: `gh issue view 8|9|10|11|12`. ADR 0001 + GLOSSARY + mockups in `docs/` (committed). Explorer notes (when ready): `%TEMP%\opencode\ml-exploration\NOTES.md`. Ledger: `docs/ledgers/monitor-lock.md` (Dot-matrix redesign section). Release: push a v* tag.
