@@ -15,6 +15,7 @@ Updated: 2026-11-19 · OpenCode (Qwen3.8 27B UD) · implement-spec #8: #9 MERGED
 - UNVERIFIED (carried): pin-mode Alt+Tab release on this Win11 build; if Alt+Tab holds the lock, add the foreground class to `is_shell_ui_class` (src/win32.rs).
 
 ## Don't retry
+- Shell commands containing an em dash `—` are rejected by the portable shell scanner ("invalid-structure"), even inside here-strings — use ASCII hyphens.
 - Image generation (grok-imagine "Invalid credential" ×2) — procedural renderer only.
 - ViewportCommand::Icon for the taskbar — use win32::set_main_window_icon.
 - Hovering the Monitor Lock window changes the clip (suspected winit) — close to tray.
