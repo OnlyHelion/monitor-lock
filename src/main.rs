@@ -14,6 +14,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
+mod dotmatrix;
 mod icon;
 #[cfg(test)]
 mod fake;
