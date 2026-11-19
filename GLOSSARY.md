@@ -29,5 +29,31 @@ Pinning the Lock to a user-chosen monitor instead of following the game window's
 _Avoid_: manual monitor, fixed monitor
 
 **Monitor picker**:
-A mode in which the cursor is free across all monitors, the monitor under the cursor is outlined with a thin yellow border, and a click pins that monitor as the Lock target.
+A mode in which the cursor is free across all monitors, the monitor under the cursor is outlined with a dotted orange ring carrying two orbiting chasers, and a click pins that monitor as the Lock target.
 _Avoid_: monitor selector, pick mode, monitor chooser
+
+## Design language
+
+**Dot matrix**:
+The app's visual design: every UI element — glyph, text, buttons, background — is drawn on one regular grid of equal dots on a near-black panel. The unlit dots stay faintly visible.
+_Avoid_: LED panel, pixel art, bitmap font
+
+**Real dot**:
+The dot shape of the Dot matrix: a circle with clipped corners (superellipse, exponent 4) — not a perfect circle, not a square pixel.
+_Avoid_: square dot, pixel, round dot
+
+**Off-dot**:
+The faint unlit dot visible across the whole Dot-matrix panel; it forms the background grid.
+_Avoid_: background, grid line, placeholder
+
+**Chaser**:
+One of the two brighter dots that orbit the picker ring on opposite sides, showing the ring is live. The only continuous animation in the app.
+_Avoid_: cursor, spinner, indicator
+
+**Hollow**:
+The suspended state of the padlock glyph: the outline only, in the same orange as locked.
+_Avoid_: outline mode, ghost, disabled
+
+**Wave**:
+The one-shot (≤300 ms) state-change animation: a small localized orange gradient ring radiating from the padlock across the Dot-matrix panel, then static.
+_Avoid_: sweep, ripple, transition
