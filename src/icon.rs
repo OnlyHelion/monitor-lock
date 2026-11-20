@@ -1,23 +1,31 @@
-//! The app icon: a monitor whose screen shows the Lock state. Released =
-//! dark gray screen; engaged = amber screen with a padlock. Pure pixel art
-//! (no Win32), so it is drawn at any size and unit-tested.
+//! The app icon: a monitor whose screen is an 18×18 dot panel showing the
+//! Lock state — the solid padlock lit locked-orange when engaged, white when
+//! released. Pure pixel art (no Win32), so it is drawn at any size and
+//! unit-tested.
 //!
 //! One source for every place the icon appears: the tray (swapped on state
 //! change), the window's title bar/taskbar icon, and res/icon.ico (the exe
-//! icon, embedded by build.rs — the engaged art). The test
-//! `ico_file_matches_the_art` fails if res/icon.ico drifts from this code;
-//! regenerate it with `MONITOR_LOCK_WRITE_ICO=1 cargo test ico_file`.
+//! icon, embedded by build.rs — the engaged art). The dot panel reuses the
+//! design language from dotmatrix.rs — the same 18×18 padlock cells and the
+//! same "real dot" superellipse the window renders — so the icon can never
+//! drift from the window. The test `ico_file_matches_the_art` fails if
+//! res/icon.ico drifts from this code; regenerate it with
+//! `MONITOR_LOCK_WRITE_ICO=1 cargo test ico_file`.
 
-/// Amber: the engaged screen (same amber the UI uses for pin hints).
-const AMBER: [u8; 3] = [255, 191, 64];
-/// Dark gray: the released screen.
-const SCREEN_OFF: [u8; 3] = [52, 53, 60];
-/// The bezel and the padlock body: dark slate.
+use crate::dotmatrix;
+
+/// Panel background and off-dot, from the one source (dotmatrix.rs) — the
+/// same palette the window renders.
+const PANEL_BG: [u8; 3] = [dotmatrix::BG[0], dotmatrix::BG[1], dotmatrix::BG[2]];
+const PANEL_OFF: [u8; 3] = [dotmatrix::OFF[0], dotmatrix::OFF[1], dotmatrix::OFF[2]];
+/// The padlock, engaged (locked orange).
+const LOCKED: [u8; 3] = [dotmatrix::ORANGE[0], dotmatrix::ORANGE[1], dotmatrix::ORANGE[2]];
+/// The padlock, released (white).
+const FREE: [u8; 3] = [dotmatrix::WHITE[0], dotmatrix::WHITE[1], dotmatrix::WHITE[2]];
+/// The bezel and the stand's base: dark slate.
 const BEZEL: [u8; 3] = [88, 90, 110];
 /// The stand's neck, a shade lighter than the bezel.
 const NECK: [u8; 3] = [104, 106, 128];
-/// The padlock's shackle and keyhole: light gray.
-const LIGHT: [u8; 3] = [236, 236, 240];
 
 /// The sizes packed into res/icon.ico (Explorer, taskbar and Alt+Tab pick
 /// the best fit per DPI and view).
@@ -28,6 +36,7 @@ pub const ICO_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
 /// anti-aliased by 4x4 supersampling.
 pub fn rgba(size: u32, engaged: bool) -> Vec<u8> {
     const SS: u32 = 4;
+    let panel = panel_cells(engaged);
     let mut out = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
         for x in 0..size {
@@ -37,7 +46,7 @@ pub fn rgba(size: u32, engaged: bool) -> Vec<u8> {
                 for sx in 0..SS {
                     let u = (x as f32 + (sx as f32 + 0.5) / SS as f32) / size as f32;
                     let v = (y as f32 + (sy as f32 + 0.5) / SS as f32) / size as f32;
-                    if let Some(c) = color_at(u, v, engaged) {
+                    if let Some(c) = color_at(u, v, &panel) {
                         r += u32::from(c[0]);
                         g += u32::from(c[1]);
                         b += u32::from(c[2]);
@@ -60,13 +69,10 @@ pub fn rgba(size: u32, engaged: bool) -> Vec<u8> {
 
 /// The color at normalized point (u, v) in 0..1, or None (transparent).
 /// Shapes are painted back to front: the topmost hit wins.
-fn color_at(u: f32, v: f32, engaged: bool) -> Option<[u8; 3]> {
-    // Screen area (inside the bezel).
+fn color_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> Option<[u8; 3]> {
+    // Screen area (inside the bezel): the 18×18 dot panel.
     if in_round_rect(u, v, 0.10, 0.15, 0.90, 0.63, 0.015) {
-        if engaged {
-            return Some(padlock_at(u, v).unwrap_or(AMBER));
-        }
-        return Some(SCREEN_OFF);
+        return Some(panel_at(u, v, panel));
     }
     // Bezel.
     if in_round_rect(u, v, 0.02, 0.07, 0.98, 0.76, 0.07) {
@@ -86,22 +92,41 @@ fn color_at(u: f32, v: f32, engaged: bool) -> Option<[u8; 3]> {
     None
 }
 
-/// The padlock on the engaged screen, centered in it.
-fn padlock_at(u: f32, v: f32) -> Option<[u8; 3]> {
-    // Keyhole: a dot and a slot, cut out of the body (shows the screen).
-    let keyhole = dist(u, v, 0.5, 0.465) < 0.028
-        || ((u - 0.5).abs() < 0.013 && (0.465..0.52).contains(&v));
-    if in_round_rect(u, v, 0.37, 0.385, 0.63, 0.575, 0.025) {
-        return if keyhole { Some(LIGHT) } else { Some(BEZEL) };
+/// The 18×18 panel's cell colours, row-major: the solid padlock lit (orange
+/// engaged, white released), every other cell the off-dot colour. The padlock
+/// cells come from the one source (dotmatrix.rs) — the same glyph the window
+/// stamps.
+fn panel_cells(engaged: bool) -> [[u8; 3]; 18 * 18] {
+    let lit = if engaged { LOCKED } else { FREE };
+    let mut cells = [PANEL_OFF; 18 * 18];
+    for (row, col) in dotmatrix::padlock_cells(dotmatrix::Padlock::Solid) {
+        cells[(row * 18 + col) as usize] = lit;
     }
-    // Shackle: an arch over the body, with short straight legs.
-    let (cx, cy, r_out, r_in) = (0.5, 0.30, 0.10, 0.058);
-    let shackle = if v < cy {
-        (r_in..r_out).contains(&dist(u, v, cx, cy))
+    cells
+}
+
+/// The dot panel in the screen: the panel background with an 18×18 grid of
+/// "real dots" (the same superellipse dotmatrix.rs renders) — the padlock
+/// lit, every other dot off. The panel is a centred square, side = the
+/// screen's height (the screen is wider than tall).
+fn panel_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> [u8; 3] {
+    const N: u32 = 18;
+    const TOP: f32 = 0.15; // the screen's top edge
+    const SIDE: f32 = 0.48; // the screen's height = the panel's side
+    const LEFT: f32 = 0.5 - SIDE / 2.0;
+    if u < LEFT || u > LEFT + SIDE {
+        return PANEL_BG; // the screen margin beside the square
+    }
+    let pitch = SIDE / N as f32;
+    let col = (((u - LEFT) / pitch) as u32).min(N - 1);
+    let row = (((v - TOP) / pitch) as u32).min(N - 1);
+    let ox = u - (LEFT + col as f32 * pitch);
+    let oy = v - (TOP + row as f32 * pitch);
+    if dotmatrix::dot_at(ox, oy, pitch) {
+        panel[(row * N + col) as usize]
     } else {
-        v < 0.39 && (r_in..r_out).contains(&(u - cx).abs())
-    };
-    shackle.then_some(LIGHT)
+        PANEL_BG
+    }
 }
 
 fn dist(u: f32, v: f32, cx: f32, cy: f32) -> f32 {
@@ -194,5 +219,69 @@ mod tests {
         // The outline (alpha) is the same monitor in both states.
         let alpha = |p: &[u8]| p.chunks(4).map(|c| c[3]).collect::<Vec<_>>();
         assert_eq!(alpha(&on), alpha(&off));
+    }
+
+    #[test]
+    fn the_states_differ_only_inside_the_screen_area() {
+        // The bezel, neck and base paint identically in both states; only the
+        // screen's contents may differ. (A pixel whose centre is a full pixel
+        // outside the screen's box has no supersample inside it.)
+        const S: u32 = 64;
+        const M: f32 = 1.0 / S as f32;
+        let (on, off) = (rgba(S, true), rgba(S, false));
+        for y in 0..S {
+            for x in 0..S {
+                let u = (x as f32 + 0.5) / S as f32;
+                let v = (y as f32 + 0.5) / S as f32;
+                if !(u > 0.10 - M && u < 0.90 + M && v > 0.15 - M && v < 0.63 + M) {
+                    let i = ((y * S + x) * 4) as usize;
+                    assert_eq!(
+                        &on[i..i + 4],
+                        &off[i..i + 4],
+                        "pixel ({x},{y}) outside the screen area differs between states"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_screen_is_the_18x18_dot_panel() {
+        // The panel is a centred square, side = the screen's height: u from
+        // 0.26 to 0.74, v from 0.15 to 0.63, 18×18 cells.
+        const S: u32 = 256;
+        const N: u32 = 18;
+        const TOP: f32 = 0.15;
+        const SIDE: f32 = 0.48;
+        const LEFT: f32 = 0.5 - SIDE / 2.0; // centred, as in panel_at
+        let pitch = SIDE / N as f32;
+        let (engaged, released) = (rgba(S, true), rgba(S, false));
+        let px = |u: f32, v: f32, img: &[u8]| -> [u8; 3] {
+            let x = (u * S as f32) as u32;
+            let y = (v * S as f32) as u32;
+            let i = ((y * S + x) * 4) as usize;
+            [img[i], img[i + 1], img[i + 2]]
+        };
+        let centre = |row: u32, col: u32| {
+            (LEFT + (col as f32 + 0.5) * pitch, TOP + (row as f32 + 0.5) * pitch)
+        };
+        // A padlock body cell (not the keyhole): the solid padlock lit
+        // locked-orange engaged, white released.
+        let (u, v) = centre(13, 8);
+        assert_eq!(px(u, v, &engaged), [255, 179, 71], "padlock lit orange when engaged");
+        assert_eq!(px(u, v, &released), [232, 232, 236], "padlock lit white when released");
+        // An off-dot cell (the padlock starts at row 2): the off-dot colour in
+        // both states.
+        let (u, v) = centre(0, 0);
+        assert_eq!(px(u, v, &engaged), [38, 40, 46]);
+        assert_eq!(px(u, v, &released), [38, 40, 46]);
+        // The keyhole is cut out of the padlock: off, not lit.
+        let (u, v) = centre(11, 8);
+        assert_eq!(px(u, v, &engaged), [38, 40, 46], "keyhole is cut out");
+        // The panel background: the screen margin beside the square, and the
+        // gap between two dots.
+        assert_eq!(px(0.15, 0.39, &engaged), [14, 15, 19], "screen margin");
+        let (u, v) = (LEFT + pitch, TOP + 0.5 * pitch);
+        assert_eq!(px(u, v, &engaged), [14, 15, 19], "gap between dots");
     }
 }
