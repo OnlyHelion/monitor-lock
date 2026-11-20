@@ -165,7 +165,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Monitor Lock")
-            .with_inner_size([400.0, 210.0])
+            // The dot panel: 128×80 cells at 5 points per cell. Not
+            // resizable by the user — the window only grows/shrinks with the
+            // DETAILS rows (a different aspect would distort the stretched
+            // texture and the dots would stop being round).
+            .with_inner_size([640.0, 400.0])
+            .with_resizable(false)
             // The tray starts released, so the window does too.
             .with_icon(app::window_icon(false)),
         ..Default::default()
@@ -183,6 +188,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 icons,
                 state_rx,
                 cmd_tx,
+                wave_start: None,
+                prev_key: None,
+                details_open: false,
+                inner_h: 400.0,
+                cursor_hand: false,
             }) as _)
         }),
     )?;

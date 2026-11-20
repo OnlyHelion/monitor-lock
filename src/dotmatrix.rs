@@ -563,6 +563,83 @@ pub fn dot_at(ox: f32, oy: f32, pitch: f32) -> bool {
     dx * dx * dx * dx + dy * dy * dy * dy <= 1.0
 }
 
+/// The effective state key the window renders: the padlock state, the
+/// status rows, and the one-shot wave all key off it (any change starts a
+/// fresh wave).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateKey {
+    /// No clip, cursor free, no pin: the padlock is solid white.
+    Released,
+    /// A pinned monitor with the Lock released (the pin outlives a focus
+    /// loss): the padlock is hollow orange.
+    Suspended,
+    /// The cursor is clipped to the target monitor: the padlock is solid
+    /// orange.
+    Engaged,
+    /// The Monitor picker is active: the Lock is released while picking.
+    Picking,
+}
+
+/// Derive the effective state key from a snapshot. Precedence: picking,
+/// engaged, suspended, released — the same derivation the poll thread (the
+/// engaged edge) and the old UI (the suspended hint) used, in one place.
+pub fn state_key(snap: &crate::core::LockSnapshot) -> StateKey {
+    use crate::core::LockState;
+    if snap.picking {
+        StateKey::Picking
+    } else if matches!(snap.lock, LockState::Engaged { .. }) {
+        StateKey::Engaged
+    } else if snap.pinned.is_some() {
+        StateKey::Suspended
+    } else {
+        StateKey::Released
+    }
+}
+
+/// Truncate `text` so it fits `max_cells` cells of the 5×7 font: n
+/// characters occupy 6n − 1 cells (5 wide + a 1-cell gap per character, the
+/// last one without a gap), so at most (max_cells + 1) / 6 characters fit.
+/// The dot font renders uppercase regardless, so no case change here.
+pub fn fit_width(text: &str, max_cells: u32) -> String {
+    let max_chars = (max_cells + 1) / 6;
+    text.chars().take(max_chars as usize).collect()
+}
+
+/// A pointer position in panel points (the panel's top-left is (0,0)) to
+/// its cell, None outside the grid. `pitch_x` / `pitch_y` are the drawn
+/// cell pitches in points (the client area divided by the grid's
+/// cols/rows).
+pub fn cell_at(x: f32, y: f32, pitch_x: f32, pitch_y: f32, cols: u32, rows: u32) -> Option<Cell> {
+    if !(pitch_x > 0.0) || !(pitch_y > 0.0) || x < 0.0 || y < 0.0 {
+        return None;
+    }
+    let c = (x / pitch_x).floor() as i64;
+    let r = (y / pitch_y).floor() as i64;
+    if c < 0 || r < 0 || c >= cols as i64 || r >= rows as i64 {
+        return None;
+    }
+    Some((c as u32, r as u32))
+}
+
+/// Whether a cell is inside a button rect (the right/bottom edges are
+/// exclusive, like `Rect::contains`).
+pub fn cell_in_rect(cell: Cell, b: &ButtonRect) -> bool {
+    cell.0 >= b.col && cell.0 < b.col + b.w && cell.1 >= b.row && cell.1 < b.row + b.h
+}
+
+/// The one-shot state-change wave's duration in ms (spec: ≤300 ms; the
+/// settled prototype uses 250 ms).
+pub const WAVE_MS: u128 = 250;
+
+/// The wave's progress t in [0,1) from its elapsed time, None once the
+/// one-shot has finished (the panel is static again).
+pub fn wave_progress(elapsed_ms: u128, duration_ms: u128) -> Option<f32> {
+    if duration_ms == 0 || elapsed_ms >= duration_ms {
+        return None;
+    }
+    Some((elapsed_ms as f32 / duration_ms as f32).min(1.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,6 +1095,86 @@ mod tests {
         let (x, y) = ring_point(&b, 3.0 * l / 4.0);
         assert!((y - 276.0).abs() < 1e-3, "3/4 around is on the bottom edge, y={y}");
         assert!(x > 48.0 && x < 352.0, "3/4 around is between the bottom corners, x={x}");
+    }
+
+    #[test]
+    fn state_key_precedence_is_picking_over_engaged_over_suspended_over_released() {
+        use crate::core;
+        let mut snap = core::LockSnapshot::default();
+        assert_eq!(state_key(&snap), StateKey::Released);
+
+        // A pin with the Lock released is suspended (the pin outlives a
+        // focus loss).
+        snap.pinned = Some(core::MonitorTarget {
+            monitor_id: r"\\.\DISPLAY1".into(),
+            monitor_bounds: Rect { x: 0, y: 0, width: 1920, height: 1080 },
+        });
+        assert_eq!(state_key(&snap), StateKey::Suspended);
+
+        // An engaged Lock beats the pin (start_picker keeps the pin).
+        snap.lock = core::LockState::Engaged {
+            window_identity: 1,
+            window_title: "My Game".into(),
+            monitor_id: r"\\.\DISPLAY1".into(),
+            monitor_bounds: Rect { x: 0, y: 0, width: 1920, height: 1080 },
+        };
+        assert_eq!(state_key(&snap), StateKey::Engaged);
+
+        // Picking beats everything: the Lock is released while picking, but
+        // the key is still Picking (the padlock renders released-white).
+        snap.picking = true;
+        assert_eq!(state_key(&snap), StateKey::Picking);
+    }
+
+    #[test]
+    fn fit_width_truncates_to_the_cell_budget() {
+        // n characters occupy 6n-1 cells: 1->5, 2->11, 3->17.
+        assert_eq!(fit_width("AB", 5), "A");
+        assert_eq!(fit_width("AB", 10), "A"); // 2 chars need 11
+        assert_eq!(fit_width("ABC", 11), "AB"); // exactly 2 fit in 11
+        assert_eq!(fit_width("ABCD", 17), "ABC"); // exactly 3 fit in 17
+        assert_eq!(fit_width("ABCD", 16), "AB"); // 16 falls short of 17
+        assert_eq!(fit_width("", 100), "");
+        // The 94-cell status row (col 34 of the 128-col grid): 15 chars fit
+        // (6·15−1 = 89); 16 would need 95.
+        assert_eq!(fit_width("TARGET: DISPLAY1", 94), "TARGET: DISPLAY");
+        // The 120-cell detail row (col 8): exactly 20 chars fit (6·20−1 =
+        // 119).
+        assert_eq!(fit_width("ABCDEFGHIJKLMNOPQRST", 120), "ABCDEFGHIJKLMNOPQRST");
+        assert_eq!(fit_width("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 120), "ABCDEFGHIJKLMNOPQRST");
+    }
+
+    #[test]
+    fn cell_at_maps_pointer_points_to_grid_cells() {
+        let p = 5.0;
+        assert_eq!(cell_at(0.0, 0.0, p, p, 128, 80), Some((0, 0)));
+        assert_eq!(cell_at(2.5 * p, 0.5 * p, p, p, 128, 80), Some((2, 0)));
+        assert_eq!(cell_at(2.99 * p, 79.99 * p, p, p, 128, 80), Some((2, 79)));
+        // The grid's right/bottom edges are outside.
+        assert_eq!(cell_at(128.0 * p, 0.0, p, p, 128, 80), None);
+        assert_eq!(cell_at(0.0, 80.0 * p, p, p, 128, 80), None);
+        // Negative (outside the panel's top-left) is outside.
+        assert_eq!(cell_at(-0.1, 0.0, p, p, 128, 80), None);
+        assert_eq!(cell_at(0.0, -0.1, p, p, 128, 80), None);
+    }
+
+    #[test]
+    fn cell_in_rect_matches_the_button_rects() {
+        let pick = ButtonRect { col: 8, row: 52, w: 27, h: 11 };
+        assert!(cell_in_rect((8, 52), &pick));
+        assert!(cell_in_rect((8 + 26, 52 + 10), &pick));
+        assert!(!cell_in_rect((8 + 27, 52), &pick)); // right edge exclusive
+        assert!(!cell_in_rect((8, 52 + 11), &pick)); // bottom edge exclusive
+        assert!(!cell_in_rect((7, 52), &pick));
+        assert!(!cell_in_rect((35, 52), &pick)); // the gap between the frames
+    }
+
+    #[test]
+    fn wave_progress_counts_to_the_one_shot_end() {
+        assert_eq!(wave_progress(0, WAVE_MS), Some(0.0));
+        assert_eq!(wave_progress(125, WAVE_MS), Some(0.5));
+        assert_eq!(wave_progress(WAVE_MS, WAVE_MS), None); // finished at t=1
+        assert_eq!(wave_progress(WAVE_MS + 50, WAVE_MS), None);
     }
 
     #[test]

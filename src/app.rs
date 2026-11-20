@@ -1,17 +1,19 @@
 //! Thin-layer UI: the tray icon and the on-demand egui window. No unit tests
-//! (spec: the thin layer is verified by the user's in-game hand-check).
+//! (spec: the thin layer is verified by the user's in-game hand-check). The
+//! window's content is one dot-matrix panel texture (the `dotmatrix` module):
+//! no native widgets are drawn for it; the buttons are hit-tested by hand.
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::core;
+use crate::dotmatrix;
 use crate::icon;
-use crate::seam::Rect;
 use crate::win32;
 
 /// The two pre-built tray icons: one per Lock state, swapped on state change
@@ -77,6 +79,16 @@ pub struct MonitorLockApp {
     pub(crate) state_rx: mpsc::Receiver<bool>,
     /// Sends user commands (tray menu / window buttons) to the poll thread.
     pub(crate) cmd_tx: mpsc::Sender<UiCommand>,
+    /// When the one-shot state-change wave started (None: not playing).
+    pub(crate) wave_start: Option<Instant>,
+    /// The last rendered state key (a change starts a fresh wave).
+    pub(crate) prev_key: Option<dotmatrix::StateKey>,
+    /// The DETAILS diagnostic rows are shown (the window grows with them).
+    pub(crate) details_open: bool,
+    /// The last requested inner height (points).
+    pub(crate) inner_h: f32,
+    /// The cursor shows a pointing hand (hovering an enabled button).
+    pub(crate) cursor_hand: bool,
 }
 
 impl eframe::App for MonitorLockApp {
@@ -105,116 +117,170 @@ impl eframe::App for MonitorLockApp {
         }
 
         let snap = self.shared.lock().unwrap().clone();
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Monitor Lock");
-            ui.separator();
+        let key = dotmatrix::state_key(&snap);
 
-            // The essentials: the Lock state, its target, and the pin.
-            match &snap.lock {
-                core::LockState::Released => {
-                    ui.label(
-                        egui::RichText::new("Lock: released")
-                            .color(egui::Color32::from_rgb(136, 136, 136)),
-                    );
-                }
-                core::LockState::Engaged { window_title, .. } => {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Lock: engaged — {}",
-                            if window_title.is_empty() {
-                                "window with no title"
-                            } else {
-                                window_title
-                            }
-                        ))
-                        .color(egui::Color32::from_rgb(80, 200, 120)),
-                    );
-                }
-            }
-
-            // The current target: the pinned monitor (Monitor override) if
-            // any, else the Game monitor. Shown while the Lock is released
-            // too — a pin outlives a focus loss.
-            if let Some(pinned) = &snap.pinned {
-                ui.label(format!(
-                    "Target monitor (pinned): {}",
-                    format_monitor(&pinned.monitor_id, &pinned.monitor_bounds)
-                ));
-                // Pin mode is click-driven: any focus change suspends the
-                // lock; a click inside the pinned monitor re-locks, a click
-                // outside it drops the pin.
-                if matches!(snap.lock, core::LockState::Released) && !snap.picking {
-                    ui.label(
-                        egui::RichText::new(
-                            "Pinned (suspended): click inside this monitor to re-lock, click elsewhere to drop the pin",
-                        )
-                        .color(egui::Color32::from_rgb(255, 191, 64)),
-                    );
-                } else {
-                    ui.label("Pinned: Alt+Tab or any focus change suspends the lock");
-                }
-            } else if let Some(game) = &snap.game_window {
-                ui.label(format!(
-                    "Target monitor (auto): {}",
-                    format_monitor(&game.game_monitor_id, &game.game_monitor_bounds)
-                ));
-            } else {
-                ui.label("Target monitor: — (no game window)");
-            }
-
-            if snap.picking {
-                ui.label(
-                    egui::RichText::new(
-                        "Monitor picker: move to a monitor — click to pin, Esc to cancel",
-                    )
-                    .color(egui::Color32::from_rgb(255, 255, 0)),
-                );
-            }
-
-            ui.separator();
-            ui.horizontal(|ui| {
-                let pick = ui.add_enabled(!snap.picking, egui::Button::new("Pick monitor"));
-                let auto = ui.button("Back to auto");
-                let exit = ui.button("Exit");
-                if pick.clicked() {
-                    let _ = self.cmd_tx.send(UiCommand::StartPicker);
-                }
-                if auto.clicked() {
-                    let _ = self.cmd_tx.send(UiCommand::BackToAuto);
-                }
-                if exit.clicked() {
-                    exit_app();
-                }
+        // The one-shot state-change wave: fresh on every state-key change
+        // (250 ms, from the padlock centre, dots blending toward ORANGE),
+        // then the panel is static again.
+        let now = Instant::now();
+        if self.prev_key != Some(key) {
+            self.prev_key = Some(key);
+            self.wave_start = Some(now);
+        }
+        let wave_t = self
+            .wave_start
+            .and_then(|start| {
+                dotmatrix::wave_progress(
+                    now.duration_since(start).as_millis(),
+                    dotmatrix::WAVE_MS,
+                )
             });
 
-            // Everything else is diagnostics, one click away.
-            ui.separator();
-            egui::CollapsingHeader::new("Details")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.label(format!("Foreground window: {}", foreground_label(&snap)));
-                    ui.label(format!("Game window: {}", game_window_label(&snap)));
-                    ui.label(format!("Monitors: {}", snap.monitors.len()));
-                    for m in &snap.monitors {
-                        ui.label(format!("  {}", format_monitor(&m.id, &m.bounds)));
+        // The panel content (padlock, the three status rows, the detail
+        // rows) and the settled layout, in cells.
+        let (padlock, padlock_color, status, detail_rows) =
+            panel_content(&snap, key, self.details_open);
+        let (mut map, placed) = dotmatrix::layout(&dotmatrix::Panel {
+            padlock,
+            padlock_color,
+            status,
+            detail_rows,
+        });
+        let cols = map.cols();
+        let rows = map.rows();
+
+        // PICK is dim and dead while the picker is active (the Lock is
+        // released while picking; a repeated start would be a no-op anyway).
+        if snap.picking {
+            let b = placed.buttons[0];
+            map.frame(b.col, b.row, b.w, b.h, dim(dotmatrix::GREY));
+            map.stamp_text("PICK", b.col + 2, b.row + 2, dim(dotmatrix::WHITE));
+        }
+
+        // The wave: blend dots toward ORANGE by wave_intensity(d, t). The
+        // formula's distances are 1x-pitch px, so 5 px per cell; the padlock
+        // centre is (8+9, 21+9) in cell units.
+        if let Some(t) = wave_t {
+            let (pc, pr) = placed.padlock;
+            let (pc, pr) = (pc as f32 + 9.0, pr as f32 + 9.0);
+            for r in 0..rows {
+                for c in 0..cols {
+                    let dx = (c as f32 + 0.5) - pc;
+                    let dy = (r as f32 + 0.5) - pr;
+                    let d = (dx * dx + dy * dy).sqrt() * 5.0;
+                    let i = dotmatrix::wave_intensity(d, t);
+                    if i > 0.0 {
+                        map.set(c, r, blend_toward(map.get(c, r), dotmatrix::ORANGE, i));
                     }
-                    if snap.clip_reasserts > 0 {
-                        ui.label(format!(
-                            "Another program reset the cursor clip {} time(s); the lock put it back and the mouse guard kept the cursor in{}",
-                            snap.clip_reasserts,
-                            match snap.foreign_clip {
-                                Some(r) => {
-                                    format!(" (last: {},{} {}x{})", r.x, r.y, r.width, r.height)
-                                }
-                                None => String::new(),
-                            }
-                        ));
-                    }
+                }
+            }
+        }
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            let ctx = ui.ctx();
+            let rect = ui.max_rect();
+            let ppp = ctx.input(|i| i.pixels_per_point());
+
+            // The DPI-snapped pitch: 5 px per cell at 1x, scaled with the
+            // display, clamped so the whole grid still fits the client area.
+            // The texture is then stretched back to the panel: a uniform
+            // scale on both axes (the window's aspect matches the grid's),
+            // so the dots stay round.
+            let client_w_px = (rect.width() * ppp) as u32;
+            let client_h_px = (rect.height() * ppp) as u32;
+            let mut pitch = (5.0 * ppp).round() as u32;
+            pitch = pitch.min(client_w_px / cols).min(client_h_px / rows);
+            let pitch = pitch.max(1);
+            let tex_w = cols * pitch;
+            let tex_h = rows * pitch;
+
+            let rgba = dotmatrix::render(&map, pitch, tex_w, tex_h);
+            let tex = ctx.load_texture_cached(
+                "dot-panel",
+                egui::Id::unique("dot-panel"),
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [tex_w as usize, tex_h as usize],
+                    &rgba,
+                ),
+                Default::default(),
+            );
+            ui.painter().image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+
+            // Hit-testing: the texture is stretched to exactly the panel, so
+            // the pointer's cell is its panel point divided by the cell
+            // pitch in points.
+            let (hit, clicked) = ctx.input(|i| {
+                (
+                    i.pointer
+                        .interact_pos()
+                        .and_then(|p| {
+                            let local = p - rect.min;
+                            dotmatrix::cell_at(
+                                local.x,
+                                local.y,
+                                rect.width() / cols as f32,
+                                rect.height() / rows as f32,
+                                cols,
+                                rows,
+                            )
+                        }),
+                    i.pointer.primary_clicked(),
+                )
+            });
+            let in_ = |b: &dotmatrix::ButtonRect| {
+                hit.map_or(false, |cell| dotmatrix::cell_in_rect(cell, b))
+            };
+            let over_pick = !snap.picking && in_(&placed.buttons[0]);
+            let over_auto = in_(&placed.buttons[1]);
+            let over_exit = in_(&placed.buttons[2]);
+            let over_details = in_(&placed.details);
+
+            if clicked {
+                if over_pick {
+                    let _ = self.cmd_tx.send(UiCommand::StartPicker);
+                } else if over_auto {
+                    let _ = self.cmd_tx.send(UiCommand::BackToAuto);
+                } else if over_exit {
+                    exit_app();
+                } else if over_details {
+                    self.details_open = !self.details_open;
+                }
+            }
+
+            let hand = over_pick || over_auto || over_exit || over_details;
+            if hand != self.cursor_hand {
+                self.cursor_hand = hand;
+                ctx.set_cursor_icon(if hand {
+                    egui::CursorIcon::PointingHand
+                } else {
+                    egui::CursorIcon::Default
                 });
+            }
         });
 
-        // Live-updates: repaint on the poll cadence even without input.
-        ui.ctx().request_repaint_after(Duration::from_millis(100));
+        // The detail rows grow the grid; the window follows (and shrinks
+        // back): 5 points per cell row, 640 points wide.
+        let want_h = rows as f32 * 5.0;
+        if (want_h - self.inner_h).abs() > f32::EPSILON {
+            self.inner_h = want_h;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                640.0,
+                want_h,
+            )));
+        }
+
+        // Live-updates: the wave animates at ~16 ms; otherwise the poll
+        // cadence.
+        ui.ctx().request_repaint_after(Duration::from_millis(if wave_t.is_some() {
+            16
+        } else {
+            100
+        }));
     }
 }
 
@@ -225,32 +291,139 @@ fn exit_app() -> ! {
     std::process::exit(0);
 }
 
-/// The foreground window line: title, or a fallback for the desktop and for
-/// windows that report no title (some games).
-fn foreground_label(snap: &core::LockSnapshot) -> String {
+/// The panel content for one state: the padlock glyph and colour, the three
+/// status rows (fit to the 94 cells from col 34), and the detail rows (fit
+/// to the 120 cells from col 8, only while DETAILS is open). The dot font
+/// renders uppercase regardless, so no case change here.
+fn panel_content(
+    snap: &core::LockSnapshot,
+    key: dotmatrix::StateKey,
+    details_open: bool,
+) -> (dotmatrix::Padlock, dotmatrix::Rgba, [String; 3], Vec<String>) {
+    const STATUS_CELLS: u32 = 94; // col 34 of the 128-col grid
+    const DETAIL_CELLS: u32 = 120; // col 8 of the 128-col grid
+
+    let (padlock, padlock_color, rows3) = match key {
+        dotmatrix::StateKey::Picking => (
+            dotmatrix::Padlock::Solid,
+            dotmatrix::WHITE,
+            vec![
+                "PICKING MONITOR".to_string(),
+                "CLICK TO PIN".to_string(),
+                "ESC TO CANCEL".to_string(),
+            ],
+        ),
+        dotmatrix::StateKey::Engaged => (
+            dotmatrix::Padlock::Solid,
+            dotmatrix::ORANGE,
+            vec![
+                "LOCK: ENGAGED".to_string(),
+                foreground_line(snap),
+                target_line(snap),
+            ],
+        ),
+        dotmatrix::StateKey::Suspended => (
+            dotmatrix::Padlock::Hollow,
+            dotmatrix::ORANGE,
+            vec![
+                "LOCK: SUSPENDED".to_string(),
+                foreground_line(snap),
+                target_line(snap),
+            ],
+        ),
+        dotmatrix::StateKey::Released => (
+            dotmatrix::Padlock::Solid,
+            dotmatrix::WHITE,
+            vec![
+                "LOCK: RELEASED".to_string(),
+                // No Game window: the cursor is simply free.
+                if snap.game_window.is_some() {
+                    foreground_line(snap)
+                } else {
+                    "CURSOR FREE".to_string()
+                },
+                target_line(snap),
+            ],
+        ),
+    };
+    let status = [
+        dotmatrix::fit_width(&rows3[0], STATUS_CELLS),
+        dotmatrix::fit_width(&rows3[1], STATUS_CELLS),
+        dotmatrix::fit_width(&rows3[2], STATUS_CELLS),
+    ];
+    let detail_rows = if details_open {
+        detail_row_list(snap)
+            .into_iter()
+            .map(|r| dotmatrix::fit_width(&r, DETAIL_CELLS))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (padlock, padlock_color, status, detail_rows)
+}
+
+/// The foreground window's title (status row 2, detail FG line): the title,
+/// "NO TITLE" for a window that reports none, "NONE" when there is no
+/// foreground window.
+fn foreground_line(snap: &core::LockSnapshot) -> String {
     match &snap.foreground {
-        None => "(desktop — no foreground window)".to_string(),
-        Some(w) if w.title.is_empty() => "(window with no title)".to_string(),
+        None => "NONE".to_string(),
+        Some(w) if w.title.is_empty() => "NO TITLE".to_string(),
         Some(w) => w.title.clone(),
     }
 }
 
-/// The detected Game window line (user story 15): the Game window's title,
-/// or "none" when the foreground window is not a Game window.
-fn game_window_label(snap: &core::LockSnapshot) -> String {
-    match &snap.game_window {
-        None => "none".to_string(),
-        Some(g) if g.title.is_empty() => "(window with no title)".to_string(),
-        Some(g) => g.title.clone(),
+/// The target monitor's id (status row 3): the pinned monitor while an
+/// override is active (a pin outlives a focus loss), else the Game monitor;
+/// "TARGET: NONE" without either.
+fn target_line(snap: &core::LockSnapshot) -> String {
+    let id = snap
+        .pinned
+        .as_ref()
+        .map(|p| p.monitor_id.clone())
+        .or_else(|| snap.game_window.as_ref().map(|g| g.game_monitor_id.clone()));
+    match id {
+        Some(id) => format!("TARGET: {}", id),
+        None => "TARGET: NONE".to_string(),
     }
 }
 
-/// One monitor's id and FULL bounds (x, y, w, h) for the on-demand window.
-fn format_monitor(id: &str, bounds: &Rect) -> String {
-    format!(
-        "{}  ({}, {}) {}x{}",
-        id, bounds.x, bounds.y, bounds.width, bounds.height
-    )
+/// The DETAILS diagnostic rows (dot-friendly): foreground, game, the
+/// monitor list, and the clip re-asserts (only while nonzero).
+fn detail_row_list(snap: &core::LockSnapshot) -> Vec<String> {
+    let mut rows = vec![
+        format!("FG: {}", foreground_line(snap)),
+        format!(
+            "GAME: {}",
+            match &snap.game_window {
+                None => "NONE".to_string(),
+                Some(g) if g.title.is_empty() => "NO TITLE".to_string(),
+                Some(g) => g.title.clone(),
+            }
+        ),
+        format!("MONITORS: {}", snap.monitors.len()),
+    ];
+    for m in &snap.monitors {
+        rows.push(format!("{} {}x{}", m.id, m.bounds.width, m.bounds.height));
+    }
+    if snap.clip_reasserts > 0 {
+        rows.push(format!("CLIP REASSERTS: {}", snap.clip_reasserts));
+    }
+    rows
+}
+
+/// Blend `a` toward `b` by `t` in [0,1] (the wave; the PICK dimming).
+fn blend_toward(a: dotmatrix::Rgba, b: dotmatrix::Rgba, t: f32) -> dotmatrix::Rgba {
+    let mut out = a;
+    for k in 0..3 {
+        out[k] = (a[k] as f32 + (b[k] as f32 - a[k] as f32) * t).round().min(255.0) as u8;
+    }
+    out
+}
+
+/// The PICK button's dim while picking: 60% toward the OFF dot colour.
+fn dim(c: dotmatrix::Rgba) -> dotmatrix::Rgba {
+    blend_toward(c, dotmatrix::OFF, 0.6)
 }
 
 /// Install the tray and menu event handlers. They run as soon as an event
