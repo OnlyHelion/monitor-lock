@@ -33,6 +33,18 @@ const DOT_RATIO: f32 = 0.78;
 /// Picker ring inset from the monitor bounds, and the corner radius.
 const RING_INSET: f32 = 24.0;
 const RING_RADIUS: f32 = 24.0;
+/// The picker ring's dots: radius 5 px on 14 px arc spacing (ticket #10,
+/// mockup 08).
+pub const RING_DOT_RADIUS: f32 = 5.0;
+pub const RING_DOT_SPACING: f32 = 14.0;
+/// The orbiting chasers: radius 7 px (ticket #10).
+pub const CHASER_RADIUS: f32 = 7.0;
+/// A chaser's tail dots, nearest first: (distance behind in arc px, alpha).
+/// Same dot size as the ring, fading (ticket #10).
+pub const CHASER_TAILS: [(f32, u8); 2] = [(14.0, 102), (28.0, 51)];
+/// One chaser orbit takes 6 s — the app's only continuous animation
+/// (ticket #10, ADR 0001).
+pub const CHASER_PERIOD_SECS: f32 = 6.0;
 
 /// A cell coordinate: (col, row), column first.
 pub type Cell = (u32, u32);
@@ -481,6 +493,20 @@ pub fn ring_point(bounds: &crate::seam::Rect, s: f32) -> (f32, f32) {
     (x0 + r + r * a.cos(), y0 + r + r * a.sin())
 }
 
+/// The chaser orbit phase in [0,1) from `uptime_secs` on the current monitor:
+/// one orbit per CHASER_PERIOD_SECS, so (uptime / period) mod 1. The uptime
+/// (not the wall clock) is the phase origin, so it resets when the hovered
+/// monitor changes (ticket #10).
+pub fn chaser_phase(uptime_secs: f32) -> f32 {
+    (uptime_secs / CHASER_PERIOD_SECS).rem_euclid(1.0)
+}
+
+/// How many ring dots close the ring at ~RING_DOT_SPACING arc spacing:
+/// round(L / 14), so the last dot lands back at the start (ticket #10).
+pub fn ring_dot_count(bounds: &crate::seam::Rect) -> u32 {
+    (ring_length(bounds) / RING_DOT_SPACING).round().max(1.0) as u32
+}
+
 /// Stamp an anti-aliased "real dot" of radius `rad` centred at (cx, cy) with
 /// `color` over an existing top-down RGBA buffer (alpha-composited "over", so
 /// it works on the overlay's transparent buffer as well as opaque ones).
@@ -523,6 +549,18 @@ pub fn stamp_dot(buf: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, rad:
             }
         }
     }
+}
+
+/// Whether the local point (ox, oy) in a cell of pitch `pitch` (both in
+/// [0, pitch), from the cell's top-left corner) is inside the "real dot": the
+/// superellipse |x/a|⁴ + |y/a|⁴ ≤ 1, a = 0.39×pitch, centred in the cell.
+/// The same inequality `render`'s LUT and `stamp_dot` supersample — the icon
+/// counts 4×4 subsamples of it instead of building a per-pixel coverage LUT.
+pub fn dot_at(ox: f32, oy: f32, pitch: f32) -> bool {
+    let a = pitch * DOT_RATIO / 2.0;
+    let dx = (ox - pitch / 2.0).abs() / a;
+    let dy = (oy - pitch / 2.0).abs() / a;
+    dx * dx * dx * dx + dy * dy * dy * dy <= 1.0
 }
 
 /// The effective state key the window renders: the padlock state, the
@@ -942,6 +980,23 @@ mod tests {
     }
 
     #[test]
+    fn dot_at_matches_the_real_dot_shape() {
+        // The cell centre is inside; the cell corner is outside.
+        let p = 10.0;
+        assert!(dot_at(p / 2.0, p / 2.0, p), "centre");
+        assert!(!dot_at(0.0, 0.0, p), "corner");
+        // The on-axis half-width is a = 0.39×pitch (the settled constant).
+        assert!(dot_at(p / 2.0 + 0.389 * p, p / 2.0, p), "within 0.389×pitch");
+        assert!(!dot_at(p / 2.0 + 0.391 * p, p / 2.0, p), "beyond 0.391×pitch");
+        // On the diagonal the superellipse edge (2^(−1/4)·a) reaches further
+        // than a circle of radius a (0.707·a): 0.8408·a is inside, 0.9·a is
+        // outside (2·0.9⁴ > 1).
+        let a = 0.39 * p;
+        assert!(dot_at(p / 2.0 + 0.8408 * a, p / 2.0 + 0.8408 * a, p), "diagonal near edge");
+        assert!(!dot_at(p / 2.0 + 0.9 * a, p / 2.0 + 0.9 * a, p), "diagonal beyond edge");
+    }
+
+    #[test]
     fn wave_intensity_matches_the_settled_formula() {
         // 1 at the padlock centre at t=0.
         assert!((wave_intensity(0.0, 0.0) - 1.0).abs() < 1e-6, "centre at t=0 is 1");
@@ -1120,5 +1175,44 @@ mod tests {
         assert_eq!(wave_progress(125, WAVE_MS), Some(0.5));
         assert_eq!(wave_progress(WAVE_MS, WAVE_MS), None); // finished at t=1
         assert_eq!(wave_progress(WAVE_MS + 50, WAVE_MS), None);
+    }
+
+    #[test]
+    fn chaser_phase_wraps_on_the_6_second_orbit() {
+        // Ticket #10: the chasers orbit with a 6 s period, so the phase is
+        // (uptime / 6) mod 1, in [0, 1), from uptime on the current monitor.
+        assert!((chaser_phase(0.0) - 0.0).abs() < 1e-6, "t=0 is phase 0");
+        assert!((chaser_phase(3.0) - 0.5).abs() < 1e-6, "half a period is 0.5");
+        assert!((chaser_phase(6.0) - 0.0).abs() < 1e-6, "one full period wraps to 0");
+        assert!((chaser_phase(9.0) - 0.5).abs() < 1e-6, "1.5 periods is 0.5");
+        // A long picker session must not drift: 1000 orbits plus half.
+        assert!((chaser_phase(6003.0) - 0.5).abs() < 1e-4, "6003 s is 0.5");
+        // Always in [0, 1), increasing within one period.
+        for i in 0..12 {
+            let p = chaser_phase(i as f32);
+            assert!(p >= 0.0 && p < 1.0, "t={i}: phase {p} out of range");
+        }
+        assert!(
+            chaser_phase(1.0) < chaser_phase(2.0) && chaser_phase(2.0) < chaser_phase(5.0),
+            "phase must increase within a period"
+        );
+    }
+
+    #[test]
+    fn ring_dot_count_closes_the_ring_at_14_px_spacing() {
+        // 400x300 bounds: ring box (24,24)-(376,276), L = 2*304 + 2*204 +
+        // 2*pi*24 ~= 1166.796, so L/14 ~= 83.34 -> 83 dots.
+        let b = ring_bounds();
+        let n = ring_dot_count(&b);
+        assert_eq!(n, 83, "400x300 bounds");
+        let achieved = ring_length(&b) / n as f32;
+        assert!((achieved - 14.0).abs() < 0.2, "achieved spacing {achieved}");
+        // A real monitor: 1920x1080 -> top=1824, side=984, L ~= 5766.796,
+        // L/14 ~= 411.91 -> 412 dots.
+        let m = Rect { x: 0, y: 0, width: 1920, height: 1080 };
+        let nm = ring_dot_count(&m);
+        assert_eq!(nm, 412, "1920x1080 bounds");
+        let achieved = ring_length(&m) / nm as f32;
+        assert!((achieved - 14.0).abs() < 0.2, "achieved spacing {achieved}");
     }
 }
