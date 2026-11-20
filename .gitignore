@@ -1,1 +1,3 @@
 /target
+# Scratch and probe files (agent notes, diffs): root _* is never committed.
+/_*

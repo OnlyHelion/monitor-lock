@@ -1,4 +1,4 @@
-# Ledger — Monitor Lock (implement-spec run, spec #1)
+# Ledger — Monitor Lock (implement-spec run, spec #8: dot-matrix redesign)
 
 - 2026-11-20 — Ticket #9 section (TDD detail, layout constants, deviations/flags for hand-check) moved unchanged: `docs/ledgers/archive/monitor-lock-ticket-9-dotmatrix-2026-11-19.md`.
 
