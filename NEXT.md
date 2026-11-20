@@ -1,15 +1,16 @@
 # NEXT — Monitor Lock
-Updated: 2026-11-20 · OpenCode (Qwen3.8 27B UD) · implement-spec #8: #9 + #12 MERGED into `dot-matrix`; #10/#11 in flight
+Updated: 2026-11-20 · OpenCode (Qwen3.8 27B UD) · implement-spec #8: #9 + #10 + #12 MERGED into `dot-matrix`; only #11 (window) in flight
 
 ## Next step
-1. When each implementer reports done (#10 picker ring, #11 window still running): in main worktree `K:\monitor-lock` (on `dot-matrix`): `git merge --no-ff ticket/N-...`. On conflict → dispatch a merger subagent. Merge order = completion order.
-2. After the LAST merge: one full `cargo test` in the main worktree, then the `code-review` skill on `dot-matrix`; fix all issues in ONE implementer subagent (worktree from `dot-matrix` tip).
+1. When #11 (window, ses_e09f98eccffdjGfw9oBRoZjvoq, wt `K:\wt\monitor-lock-11`, br `ticket/11-window`) reports done: in main worktree `K:\monitor-lock` (on `dot-matrix`): `git merge --no-ff ticket/11-window`. On conflict → dispatch a merger subagent (it may touch dotmatrix.rs where #10/#12 added helpers).
+2. After that merge (the LAST): one full `cargo test` in the main worktree, then the `code-review` skill on `dot-matrix`; fix all issues in ONE implementer subagent (worktree from `dot-matrix` tip).
 3. Then report the integration branch to the user for HAND-CHECK (thin layer: window, overlay, icon destinations). Tickets stay open until the user confirms; closing is `gh issue close N --comment`. No PR (repo closes by direct master commits + v* tag).
 4. After user confirms: merge `dot-matrix` → master (or fast-forward master onto it), bump version, tag v* per prior releases. Clean up worktrees `K:\wt\monitor-lock-9|10|11|12`.
 
 ## State now
-- `dot-matrix` (main worktree) = 3cb408e = master 7c78680 (docs) + merge #9 (fa3fb1e) + merge #12 (3cb408e). #9 = pure `src/dotmatrix.rs` (967 lines, 16 tests). #12 = `src/icon.rs` dot-panel screen + `dotmatrix::dot_at` helper + regenerated `res/icon.ico`; 88/88 in its worktree (pre-check OK, awaiting user). Deviations flagged for hand-check (ledger "Ticket #9"/"#12"): detail rows share a grid row at the 6-row step; status row 1 = padlock colour; DETAILS rect = text extent (no frame); `stamp_dot` + `dot_at` added for #10/#11; unknown chars → blank; 16px icon reads as a solid-ish padlock blob (inherent at icon scale).
-- Running subagents: #10 picker ring (ses_e09f98eccffeqaDLUl3ssAc0nG, wt `K:\wt\monitor-lock-10`, br `ticket/10-picker-ring`); #11 window (ses_e09f98eccffdjGfw9oBRoZjvoq, wt `K:\wt\monitor-lock-11`, br `ticket/11-window`). Both based on fa3fb1e (pre-#12). #12 DONE (merged).
+- `dot-matrix` (main worktree) = 7893541 = master 7c78680 (docs) + merge #9 (fa3fb1e) + merge #12 (3cb408e) + merge #10 (7893541). #9 = pure `src/dotmatrix.rs`; #10 = `src/overlay.rs` ring rewrite + chaser helpers (90/90 at its tip); #12 = `src/icon.rs` dot-panel screen + `dotmatrix::dot_at` + regenerated `res/icon.ico`. All pre-checks OK, awaiting user.
+- Running subagents: #11 window (ses_e09f98eccffdjGfw9oBRoZjvoq, wt `K:\wt\monitor-lock-11`, br `ticket/11-window`). Based on fa3fb1e (pre-#10/#12) — it merges `dot-matrix` into its branch before reporting, so expect it to pick up the overlay/icon changes.
+- Hand-check checklist owed (full detail in ledger "Ticket #9"/"#10"/"#12" sections): window states + wave + DETAILS + DPI; picker ring/chasers (eyeball tail r5, n=round(L/14)); icons in all four destinations × both states.
 - Explorer notes (done): `%TEMP%\opencode\ml-exploration\NOTES.md` (222 lines, 7 sections) — handed to all three.
 - Build speed: worktrees share `$env:CARGO_TARGET_DIR="K:\monitor-lock\target"` (deps cached; cargo file-locks serialize concurrent builds — normal, don't kill).
 - UNVERIFIED (carried): pin-mode Alt+Tab release on this Win11 build; if Alt+Tab holds the lock, add the foreground class to `is_shell_ui_class` (src/win32.rs).
