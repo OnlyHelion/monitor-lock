@@ -1,0 +1,25 @@
+name: CI
+
+# Every push and pull request: formatting, lints (warnings fail the job)
+# and the tests. The release workflow (release.yml) runs on v* tags.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The tests that touch the real desktop (monitors, cursor, clip) need a
+      # logged-in session, which the runner does not have.
+      - name: Test
+        run: cargo test -- --skip real_system

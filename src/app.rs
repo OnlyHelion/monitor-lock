@@ -229,7 +229,7 @@ impl eframe::App for MonitorLockApp {
                 )
             });
             let in_ = |b: &dotmatrix::ButtonRect| {
-                hit.map_or(false, |cell| dotmatrix::cell_in_rect(cell, b))
+                hit.is_some_and(|cell| dotmatrix::cell_in_rect(cell, b))
             };
             let over_pick = !snap.picking && in_(&placed.buttons[0]);
             let over_auto = in_(&placed.buttons[1]);

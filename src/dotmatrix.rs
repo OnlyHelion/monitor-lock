@@ -522,10 +522,7 @@ pub fn render(map: &CellMap, pitch: u32, width: u32, height: u32) -> Vec<u8> {
         }
     }
 
-    let mut buf = vec![0u8; (width * height * 4) as usize];
-    for p in buf.chunks_exact_mut(4) {
-        p.copy_from_slice(&BG);
-    }
+    let mut buf = BG.repeat((width * height) as usize);
     for r in 0..map.rows() {
         for c in 0..map.cols() {
             let x0 = c * pitch;
@@ -890,7 +887,13 @@ pub fn fit_width(text: &str, max_cells: u32) -> String {
 /// cell pitches in points (the client area divided by the grid's
 /// cols/rows).
 pub fn cell_at(x: f32, y: f32, pitch_x: f32, pitch_y: f32, cols: u32, rows: u32) -> Option<Cell> {
-    if !(pitch_x > 0.0) || !(pitch_y > 0.0) || x < 0.0 || y < 0.0 {
+    if pitch_x.is_nan()
+        || pitch_y.is_nan()
+        || pitch_x <= 0.0
+        || pitch_y <= 0.0
+        || x < 0.0
+        || y < 0.0
+    {
         return None;
     }
     let c = (x / pitch_x).floor() as i64;
@@ -1635,9 +1638,11 @@ mod tests {
     #[test]
     fn panel_content_gives_the_status_lines_per_state() {
         use crate::core;
-        let mut snap = core::LockSnapshot::default();
-        snap.foreground = Some(window("My Game"));
-        snap.game_window = Some(game("My Game", "MON1"));
+        let snap = core::LockSnapshot {
+            foreground: Some(window("My Game")),
+            game_window: Some(game("My Game", "MON1")),
+            ..Default::default()
+        };
 
         // Titles keep their case here; the dot font uppercases at render.
         let p = panel_content(&snap, StateKey::Released, false);
@@ -1677,11 +1682,13 @@ mod tests {
     #[test]
     fn panel_content_detail_rows_only_while_open_and_in_order() {
         use crate::core;
-        let mut snap = core::LockSnapshot::default();
-        snap.foreground = Some(window("My Game"));
-        snap.game_window = Some(game("My Game", "MON1"));
-        snap.monitors = vec![monitor("MON1", 1920, 1080), monitor("MON2", 1280, 1024)];
-        snap.clip_reasserts = 3;
+        let mut snap = core::LockSnapshot {
+            foreground: Some(window("My Game")),
+            game_window: Some(game("My Game", "MON1")),
+            monitors: vec![monitor("MON1", 1920, 1080), monitor("MON2", 1280, 1024)],
+            clip_reasserts: 3,
+            ..Default::default()
+        };
 
         let p = panel_content(&snap, StateKey::Engaged, false);
         assert!(p.detail_rows.is_empty(), "DETAILS closed: no rows");
@@ -1709,9 +1716,11 @@ mod tests {
     #[test]
     fn panel_content_fits_the_rows_to_the_cell_budget() {
         use crate::core;
-        let mut snap = core::LockSnapshot::default();
-        snap.foreground = Some(window("ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
-        snap.game_window = Some(game("Game", "MON1"));
+        let snap = core::LockSnapshot {
+            foreground: Some(window("ABCDEFGHIJKLMNOPQRSTUVWXYZ")),
+            game_window: Some(game("Game", "MON1")),
+            ..Default::default()
+        };
         // The 94-cell status row (col 34): 15 chars fit.
         let p = panel_content(&snap, StateKey::Engaged, false);
         assert_eq!(p.status[1], "ABCDEFGHIJKLMNO");
@@ -1725,11 +1734,15 @@ mod tests {
         use crate::core;
         let none = core::LockSnapshot::default();
         assert_eq!(foreground_line(&none), "NONE");
-        let mut empty = core::LockSnapshot::default();
-        empty.foreground = Some(window(""));
+        let empty = core::LockSnapshot {
+            foreground: Some(window("")),
+            ..Default::default()
+        };
         assert_eq!(foreground_line(&empty), "NO TITLE");
-        let mut titled = core::LockSnapshot::default();
-        titled.foreground = Some(window("My Game"));
+        let titled = core::LockSnapshot {
+            foreground: Some(window("My Game")),
+            ..Default::default()
+        };
         assert_eq!(foreground_line(&titled), "My Game");
     }
 
@@ -1861,7 +1874,7 @@ mod tests {
         // Always in [0, 1), increasing within one period.
         for i in 0..12 {
             let p = chaser_phase(i as f32);
-            assert!(p >= 0.0 && p < 1.0, "t={i}: phase {p} out of range");
+            assert!((0.0..1.0).contains(&p), "t={i}: phase {p} out of range");
         }
         assert!(
             chaser_phase(1.0) < chaser_phase(2.0) && chaser_phase(2.0) < chaser_phase(5.0),
