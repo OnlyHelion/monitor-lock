@@ -1,29 +1,24 @@
 # Design reference: dot-matrix aesthetic
 
-Source: user-supplied images, 2026-11-19 (chat session `quick-panda`). Request: redesign the
-Monitor Lock UI in this style. Status: **in discussion** (grill-with-docs session), nothing implemented yet.
+Source: user-supplied images, 2026-11-19. Status: **implemented** (spec #8, tickets #9-#12, branch `dot-matrix`).
+Decisions: `docs/adr/0001-dot-matrix-design-language.md`. Terms: `GLOSSARY.md`.
+Source of truth for pixels: `src/dotmatrix.rs` (palette, font, padlock, renderer, wave, ring; pinned by tests).
 
-## The images
+## Reference images (user-supplied)
 
 | File | What it shows |
 |---|---|
-| `01-dot-grid-texture.jpg` | Dense grid of small grey/white dots on near-black, randomised brightness — a "dot-matrix panel" background texture. |
-| `02-coral-diamond-dots.jpg` | A diamond/rhombus cluster of coral-orange dots on a sparse dark dot grid — the hero shape; reads as a dot-rendered glyph in the app's accent colour. |
-| `03-dot-matrix-microwave-icons.jpg` | Stock sheet ("UI Design \| Icon design dot matrix", WAACS): white dot-matrix icons (low/medium/high power waves, defrost, defrost bread, heat drink) on black, each with a plain sans-serif caption below. Shows the icon-design language: crisp white dots, dark unlit dots visible, generous spacing, simple geometric glyphs. |
+| `01-dot-grid-texture.jpg` | Dense grid of grey/white dots on near-black: the "dot-matrix panel" texture. |
+| `02-coral-diamond-dots.jpg` | Coral-orange dot cluster on a sparse dark dot grid: a dot-rendered glyph in an accent colour. |
+| `03-dot-matrix-microwave-icons.jpg` | Stock icon sheet: white dot-matrix icons on black, unlit dots visible. |
+| `04-real-dot-shape.png` | The user's sample of a "real dot" (squircle, see ADR 0001). |
+| `current-icon-256.png` | The app icon before the redesign. |
 
-## Style language (as read from the images)
+## Mockups (`mockups/`)
 
-- Near-black background (not pure black; a dark grey/blue tint is visible in the microwave sheet).
-- Everything rendered as a **regular grid of dots**: lit dots (white or coral) form the figure,
-  dim dots stay visible as the "off" state of the panel.
-- One warm accent: **coral/orange** (≈ #F08060-ish, see image 2). The icon sheet itself is monochrome white.
-- Flat, no gradients or glow on the dots themselves (any glow in the sheet is background lighting, not per-dot).
-- Captions: plain, light sans-serif, lowercase-ish, small, centred under the icon.
+| File | Status |
+|---|---|
+| `04-glyph-a-padlock.png`, `06-padlock-states.png`, `07-window-mockup.png`, `08-picker-ring.png` | Approved. Rendered by `tools/render_v2.py`. |
+| `05-glyph-c-monitor.png` | Rejected option (monitor glyph, old coral colour; the user picked the padlock). |
 
-## Open design questions (tracked in the grill session, not decided)
-
-- Scope: main window only, or also tray/window/taskbar/exe icons?
-- How literal: full dot-grid background + dot-rendered glyphs, vs. palette-only?
-- Which glyph for the lock (padlock vs. the diamond shape vs. current monitor icon)?
-- Colour per state (locked = coral, unlocked = white/grey?)
-- Any animation on state change?
+Re-render: `python docs/design/dot-matrix/tools/render_v2.py` (writes into `mockups/`).
