@@ -191,52 +191,35 @@ impl PickerOverlay {
             core::slice::from_raw_parts_mut(self.pixels, (w as usize) * (h as usize) * 4)
         };
         buf.fill(0); // fully transparent
+        // Stamp one dot on the ring at arc length `s` (ring_point wraps the
+        // negative offsets behind the chasers).
+        let mut stamp_ring = |s: f32, radius: f32, color: dotmatrix::Rgba| {
+            let (x, y) = dotmatrix::ring_point(bounds, s);
+            dotmatrix::stamp_dot(buf, w as u32, h as u32, x, y, radius, color);
+        };
         // The dotted ring: n dots closing the arc at ~14 px spacing.
         let n = dotmatrix::ring_dot_count(bounds);
         for i in 0..n {
-            let (x, y) = dotmatrix::ring_point(bounds, l * i as f32 / n as f32);
-            dotmatrix::stamp_dot(
-                buf,
-                w as u32,
-                h as u32,
-                x,
-                y,
+            stamp_ring(
+                l * i as f32 / n as f32,
                 dotmatrix::RING_DOT_RADIUS,
                 dotmatrix::ORANGE,
             );
         }
         // The two chasers, opposite each other, each with two tail dots
-        // trailing behind (ring_point wraps the negative offsets).
+        // trailing behind.
         for k in 0..2u32 {
             let s = phase * l + l * k as f32 / 2.0;
             for &(behind, alpha) in &dotmatrix::CHASER_TAILS {
-                let (x, y) = dotmatrix::ring_point(bounds, s - behind);
                 let tail: dotmatrix::Rgba = [
                     dotmatrix::ORANGE[0],
                     dotmatrix::ORANGE[1],
                     dotmatrix::ORANGE[2],
                     alpha,
                 ];
-                dotmatrix::stamp_dot(
-                    buf,
-                    w as u32,
-                    h as u32,
-                    x,
-                    y,
-                    dotmatrix::RING_DOT_RADIUS,
-                    tail,
-                );
+                stamp_ring(s - behind, dotmatrix::RING_DOT_RADIUS, tail);
             }
-            let (x, y) = dotmatrix::ring_point(bounds, s);
-            dotmatrix::stamp_dot(
-                buf,
-                w as u32,
-                h as u32,
-                x,
-                y,
-                dotmatrix::CHASER_RADIUS,
-                dotmatrix::ORANGE,
-            );
+            stamp_ring(s, dotmatrix::CHASER_RADIUS, dotmatrix::ORANGE);
         }
         self.push(bounds);
     }

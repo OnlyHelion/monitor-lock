@@ -167,52 +167,53 @@ pub fn glyph_cells(ch: char) -> Vec<Cell> {
     cells
 }
 
-/// The lit cells of the 18×18 padlock, as (row, col) — the coordinate order
-/// of the approved prototype. The solid variant cuts the keyhole out of the
-/// body; the hollow variant is a 1-dot outline with a lit keyhole.
+/// The lit cells of the 18×18 padlock, as (col, row) — the same coordinate
+/// order as every other cell in the panel. The solid variant cuts the
+/// keyhole out of the body; the hollow variant is a 1-dot outline with a
+/// lit keyhole.
 pub fn padlock_cells(variant: Padlock) -> Vec<(u32, u32)> {
     // Copied from padlock_solid / padlock_hollow in render_v2.py.
-    let keyhole: [(u32, u32); 4] = [(11, 8), (11, 9), (12, 8), (12, 9)];
+    let keyhole: [(u32, u32); 4] = [(8, 11), (9, 11), (8, 12), (9, 12)];
     let mut lit: Vec<(u32, u32)> = Vec::new();
     match variant {
         Padlock::Solid => {
             for r in [2u32, 3] {
                 for c in 5..13 {
-                    lit.push((r, c)); // shackle top, 2 thick
+                    lit.push((c, r)); // shackle top, 2 thick
                 }
             }
             for r in 4..9 {
                 for c in [5u32, 6, 11, 12] {
-                    lit.push((r, c)); // shackle sides
+                    lit.push((c, r)); // shackle sides
                 }
             }
             for r in 9..17 {
                 for c in 3..15 {
-                    lit.push((r, c)); // body
+                    lit.push((c, r)); // body
                 }
             }
-            for (r, c) in keyhole {
-                lit.retain(|&(rr, cc)| !(rr == r && cc == c)); // keyhole cut
+            for (c, r) in keyhole {
+                lit.retain(|&p| p != (c, r)); // keyhole cut
             }
         }
         Padlock::Hollow => {
             for c in 5..13 {
-                lit.push((2, c)); // shackle top outline
+                lit.push((c, 2)); // shackle top outline
             }
             for r in 3..9 {
-                lit.push((r, 5));
-                lit.push((r, 12)); // shackle sides, 1 thick
+                lit.push((5, r));
+                lit.push((12, r)); // shackle sides, 1 thick
             }
             for c in 3..15 {
-                lit.push((9, c));
-                lit.push((16, c)); // body top/bottom
+                lit.push((c, 9));
+                lit.push((c, 16)); // body top/bottom
             }
             for r in 10..16 {
-                lit.push((r, 3));
-                lit.push((r, 14)); // body sides
+                lit.push((3, r));
+                lit.push((14, r)); // body sides
             }
-            for (r, c) in keyhole {
-                lit.push((r, c)); // keyhole lit
+            for (c, r) in keyhole {
+                lit.push((c, r)); // keyhole lit
             }
         }
     }
@@ -280,7 +281,7 @@ impl CellMap {
 
     /// Stamp the 18×18 padlock, top-left at (col, row).
     pub fn stamp_padlock(&mut self, variant: Padlock, col: u32, row: u32, color: Rgba) {
-        for (r, c) in padlock_cells(variant) {
+        for (c, r) in padlock_cells(variant) {
             self.set(col + c, row + r, color);
         }
     }
@@ -307,47 +308,101 @@ impl CellMap {
 /// (growing the row count for the detail rows), and return the placed
 /// positions for hit-testing.
 pub fn layout(content: &Panel) -> (CellMap, Placed) {
+    // The settled layout, in cells (col, row) — the single source the stamps
+    // below and the returned `Placed` hit-test rects both use.
+    const PANEL_COLS: u32 = 128;
+    const PANEL_ROWS: u32 = 80;
+    const HEADING: Cell = (8, 7);
+    const SEP_X: u32 = 8;
+    const SEP_LEN: u32 = 120;
+    const SEP_ROWS: [u32; 2] = [17, 49];
+    const PADLOCK: Cell = (8, 21);
+    const STATUS: [Cell; 3] = [(34, 22), (34, 31), (34, 40)];
+    const BUTTON_ROW: u32 = 52;
+    const BUTTON_COLS: [u32; 3] = [8, 38, 68];
+    const BUTTON_W: u32 = 27; // 6n+3 for the 4-char labels: inner 6n−1 + 2-cell margins
+    const BUTTON_H: u32 = 11;
+    const DETAILS: (u32, u32, u32, u32) = (8, 68, 41, 7); // col, row, w, h
+    const DETAIL_ORIGIN: Cell = (8, 76);
+    const DETAIL_STEP: u32 = 6;
+    const TEXT_ROWS: u32 = 7; // the 5×7 font's row height
+
     let n = content.detail_rows.len() as u32;
     // The closed panel is the 128×80 grid (640×400 at pitch 5); detail rows
     // grow the grid with a 4-row bottom margin.
-    let detail_end = if n > 0 { 76 + (n - 1) * 6 + 7 } else { 0 };
-    let mut map = CellMap::new(128, 80.max(detail_end + 4));
+    let detail_end = if n > 0 {
+        DETAIL_ORIGIN.1 + (n - 1) * DETAIL_STEP + TEXT_ROWS
+    } else {
+        0
+    };
+    let mut map = CellMap::new(PANEL_COLS, PANEL_ROWS.max(detail_end + 4));
 
-    map.stamp_text("MONITOR LOCK", 8, 7, WHITE);
-    map.hline(17, 8, 120, DIML);
-    map.stamp_padlock(content.padlock, 8, 21, content.padlock_color);
+    map.stamp_text("MONITOR LOCK", HEADING.0, HEADING.1, WHITE);
+    map.hline(SEP_ROWS[0], SEP_X, SEP_LEN, DIML);
+    map.stamp_padlock(content.padlock, PADLOCK.0, PADLOCK.1, content.padlock_color);
     // Row 1 carries the lock state and shares the padlock colour, so the
     // state reads in two places at once; rows 2 and 3 are the settled
     // white/grey.
-    map.stamp_text(&content.status[0], 34, 22, content.padlock_color);
-    map.stamp_text(&content.status[1], 34, 31, WHITE);
-    map.stamp_text(&content.status[2], 34, 40, GREY);
-    map.hline(49, 8, 120, DIML);
-    for (label, bx) in [("PICK", 8u32), ("AUTO", 38), ("EXIT", 68)] {
-        // The frame is the 5-wide-per-char label plus 2-cell margins on each
-        // side: inner 6n−1, frame 6n+3 wide, 11 tall.
-        let inner = 6 * label.len() as u32 - 1;
-        map.frame(bx, 52, inner + 4, 11, GREY);
-        map.stamp_text(label, bx + 2, 54, WHITE);
+    map.stamp_text(
+        &content.status[0],
+        STATUS[0].0,
+        STATUS[0].1,
+        content.padlock_color,
+    );
+    map.stamp_text(&content.status[1], STATUS[1].0, STATUS[1].1, WHITE);
+    map.stamp_text(&content.status[2], STATUS[2].0, STATUS[2].1, GREY);
+    map.hline(SEP_ROWS[1], SEP_X, SEP_LEN, DIML);
+    for (label, bx) in [
+        ("PICK", BUTTON_COLS[0]),
+        ("AUTO", BUTTON_COLS[1]),
+        ("EXIT", BUTTON_COLS[2]),
+    ] {
+        map.frame(bx, BUTTON_ROW, BUTTON_W, BUTTON_H, GREY);
+        map.stamp_text(label, bx + 2, BUTTON_ROW + 2, WHITE);
     }
-    map.stamp_text("DETAILS", 8, 68, SOFT);
+    map.stamp_text("DETAILS", DETAILS.0, DETAILS.1, SOFT);
     for (i, row) in content.detail_rows.iter().enumerate() {
-        map.stamp_text(row, 8, 76 + i as u32 * 6, SOFT);
+        map.stamp_text(
+            row,
+            DETAIL_ORIGIN.0,
+            DETAIL_ORIGIN.1 + i as u32 * DETAIL_STEP,
+            SOFT,
+        );
     }
 
     let placed = Placed {
-        heading: (8, 7),
-        separators: [17, 49],
-        padlock: (8, 21),
-        status: [(34, 22), (34, 31), (34, 40)],
+        heading: HEADING,
+        separators: SEP_ROWS,
+        padlock: PADLOCK,
+        status: STATUS,
         buttons: [
-            ButtonRect { col: 8, row: 52, w: 27, h: 11 },
-            ButtonRect { col: 38, row: 52, w: 27, h: 11 },
-            ButtonRect { col: 68, row: 52, w: 27, h: 11 },
+            ButtonRect {
+                col: BUTTON_COLS[0],
+                row: BUTTON_ROW,
+                w: BUTTON_W,
+                h: BUTTON_H,
+            },
+            ButtonRect {
+                col: BUTTON_COLS[1],
+                row: BUTTON_ROW,
+                w: BUTTON_W,
+                h: BUTTON_H,
+            },
+            ButtonRect {
+                col: BUTTON_COLS[2],
+                row: BUTTON_ROW,
+                w: BUTTON_W,
+                h: BUTTON_H,
+            },
         ],
-        details: ButtonRect { col: 8, row: 68, w: 41, h: 7 },
-        detail_origin: (8, 76),
-        detail_step: 6,
+        details: ButtonRect {
+            col: DETAILS.0,
+            row: DETAILS.1,
+            w: DETAILS.2,
+            h: DETAILS.3,
+        },
+        detail_origin: DETAIL_ORIGIN,
+        detail_step: DETAIL_STEP,
     };
     (map, placed)
 }
@@ -568,13 +623,14 @@ pub fn dot_at(ox: f32, oy: f32, pitch: f32) -> bool {
 /// fresh wave).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateKey {
-    /// No clip, cursor free, no pin: the padlock is solid white.
+    /// The Lock is released and no pin is set: the cursor is free; the
+    /// padlock is solid white.
     Released,
     /// A pinned monitor with the Lock released (the pin outlives a focus
     /// loss): the padlock is hollow orange.
     Suspended,
-    /// The cursor is clipped to the target monitor: the padlock is solid
-    /// orange.
+    /// The Lock is engaged: the cursor is confined to the target monitor;
+    /// the padlock is solid orange.
     Engaged,
     /// The Monitor picker is active: the Lock is released while picking.
     Picking,
@@ -594,6 +650,142 @@ pub fn state_key(snap: &crate::core::LockSnapshot) -> StateKey {
     } else {
         StateKey::Released
     }
+}
+
+/// The window panel content for one state: the padlock glyph and colour, the
+/// three status rows (fit to the 94 cells from col 34), and the detail rows
+/// (fit to the 120 cells from col 8, only while DETAILS is open). The dot
+/// font renders uppercase regardless, so no case change here.
+pub fn panel_content(snap: &crate::core::LockSnapshot, key: StateKey, details_open: bool) -> Panel {
+    const STATUS_CELLS: u32 = 94; // col 34 of the 128-col grid
+    const DETAIL_CELLS: u32 = 120; // col 8 of the 128-col grid
+
+    let (padlock, padlock_color, rows3) = match key {
+        StateKey::Picking => (
+            Padlock::Solid,
+            WHITE,
+            vec![
+                "PICKING MONITOR".to_string(),
+                "CLICK TO PIN".to_string(),
+                "ESC TO CANCEL".to_string(),
+            ],
+        ),
+        StateKey::Engaged => (
+            Padlock::Solid,
+            ORANGE,
+            vec![
+                "LOCK: ENGAGED".to_string(),
+                foreground_line(snap),
+                target_line(snap),
+            ],
+        ),
+        StateKey::Suspended => (
+            Padlock::Hollow,
+            ORANGE,
+            vec![
+                "LOCK: SUSPENDED".to_string(),
+                foreground_line(snap),
+                target_line(snap),
+            ],
+        ),
+        StateKey::Released => (
+            Padlock::Solid,
+            WHITE,
+            vec![
+                "LOCK: RELEASED".to_string(),
+                // No Game window: the cursor is simply free.
+                if snap.game_window.is_some() {
+                    foreground_line(snap)
+                } else {
+                    "CURSOR FREE".to_string()
+                },
+                target_line(snap),
+            ],
+        ),
+    };
+    let status = [
+        fit_width(&rows3[0], STATUS_CELLS),
+        fit_width(&rows3[1], STATUS_CELLS),
+        fit_width(&rows3[2], STATUS_CELLS),
+    ];
+    let detail_rows = if details_open {
+        detail_row_list(snap)
+            .into_iter()
+            .map(|r| fit_width(&r, DETAIL_CELLS))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Panel {
+        padlock,
+        padlock_color,
+        status,
+        detail_rows,
+    }
+}
+
+/// The foreground window's title (status row 2, detail FG line): the title,
+/// "NO TITLE" for a window that reports none, "NONE" when there is no
+/// foreground window.
+pub fn foreground_line(snap: &crate::core::LockSnapshot) -> String {
+    match &snap.foreground {
+        None => "NONE".to_string(),
+        Some(w) if w.title.is_empty() => "NO TITLE".to_string(),
+        Some(w) => w.title.clone(),
+    }
+}
+
+/// The target monitor's id (status row 3): the pinned monitor while an
+/// override is active (a pin outlives a focus loss), else the Game monitor;
+/// "TARGET: NONE" without either.
+pub fn target_line(snap: &crate::core::LockSnapshot) -> String {
+    let id = snap
+        .pinned
+        .as_ref()
+        .map(|p| p.monitor_id.clone())
+        .or_else(|| snap.game_window.as_ref().map(|g| g.game_monitor_id.clone()));
+    match id {
+        Some(id) => format!("TARGET: {}", id),
+        None => "TARGET: NONE".to_string(),
+    }
+}
+
+/// The DETAILS diagnostic rows (dot-friendly): foreground, game, the
+/// monitor list, and the clip re-asserts (only while nonzero).
+pub fn detail_row_list(snap: &crate::core::LockSnapshot) -> Vec<String> {
+    let mut rows = vec![
+        format!("FG: {}", foreground_line(snap)),
+        format!(
+            "GAME: {}",
+            match &snap.game_window {
+                None => "NONE".to_string(),
+                Some(g) if g.title.is_empty() => "NO TITLE".to_string(),
+                Some(g) => g.title.clone(),
+            }
+        ),
+        format!("MONITORS: {}", snap.monitors.len()),
+    ];
+    for m in &snap.monitors {
+        rows.push(format!("{} {}x{}", m.id, m.bounds.width, m.bounds.height));
+    }
+    if snap.clip_reasserts > 0 {
+        rows.push(format!("CLIP REASSERTS: {}", snap.clip_reasserts));
+    }
+    rows
+}
+
+/// Blend `a` toward `b` by `t` in [0,1] (the wave; the PICK dimming).
+pub fn blend_toward(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let mut out = a;
+    for k in 0..3 {
+        out[k] = (a[k] as f32 + (b[k] as f32 - a[k] as f32) * t).round().min(255.0) as u8;
+    }
+    out
+}
+
+/// The PICK button's dim while picking: 60% toward the OFF dot colour.
+pub fn dim(c: Rgba) -> Rgba {
+    blend_toward(c, OFF, 0.6)
 }
 
 /// Truncate `text` so it fits `max_cells` cells of the 5×7 font: n
@@ -751,29 +943,29 @@ mod tests {
         let mut want = std::collections::BTreeSet::new();
         for r in [2u32, 3] {
             for c in 5..13 {
-                want.insert((r, c));
+                want.insert((c, r));
             }
         }
         for r in 4..9 {
             for c in [5u32, 6, 11, 12] {
-                want.insert((r, c));
+                want.insert((c, r));
             }
         }
         for r in 9..17 {
             for c in 3..15 {
-                want.insert((r, c));
+                want.insert((c, r));
             }
         }
-        for (r, c) in [(11, 8), (11, 9), (12, 8), (12, 9)] {
-            want.remove(&(r, c));
+        for (c, r) in [(8, 11), (9, 11), (8, 12), (9, 12)] {
+            want.remove(&(c, r));
         }
         let have = padlock_cells(Padlock::Solid);
         let have_set: std::collections::BTreeSet<_> = have.iter().copied().collect();
         assert_eq!(have_set, want, "solid padlock diverges from the approved shape");
         assert_eq!(have.len(), 128, "solid padlock cell count");
         // The keyhole is cut out of the solid body.
-        for (r, c) in [(11, 8), (11, 9), (12, 8), (12, 9)] {
-            assert!(!have_set.contains(&(r, c)), "keyhole ({r},{c}) must be cut");
+        for (c, r) in [(8, 11), (9, 11), (8, 12), (9, 12)] {
+            assert!(!have_set.contains(&(c, r)), "keyhole ({c},{r}) must be cut");
         }
     }
 
@@ -782,30 +974,30 @@ mod tests {
         // Independent transcription of render_v2.py padlock_hollow().
         let mut want = std::collections::BTreeSet::new();
         for c in 5..13 {
-            want.insert((2u32, c));
+            want.insert((c, 2u32));
         }
         for r in 3..9 {
-            want.insert((r, 5));
-            want.insert((r, 12));
+            want.insert((5, r));
+            want.insert((12, r));
         }
         for c in 3..15 {
-            want.insert((9u32, c));
-            want.insert((16u32, c));
+            want.insert((c, 9u32));
+            want.insert((c, 16u32));
         }
         for r in 10..16 {
-            want.insert((r, 3));
-            want.insert((r, 14));
+            want.insert((3, r));
+            want.insert((14, r));
         }
-        for (r, c) in [(11, 8), (11, 9), (12, 8), (12, 9)] {
-            want.insert((r, c));
+        for (c, r) in [(8, 11), (9, 11), (8, 12), (9, 12)] {
+            want.insert((c, r));
         }
         let have = padlock_cells(Padlock::Hollow);
         let have_set: std::collections::BTreeSet<_> = have.iter().copied().collect();
         assert_eq!(have_set, want, "hollow padlock diverges from the approved shape");
         assert_eq!(have.len(), 60, "hollow padlock cell count");
         // The keyhole is lit in the hollow variant.
-        for (r, c) in [(11, 8), (11, 9), (12, 8), (12, 9)] {
-            assert!(have_set.contains(&(r, c)), "keyhole ({r},{c}) must be lit");
+        for (c, r) in [(8, 11), (9, 11), (8, 12), (9, 12)] {
+            assert!(have_set.contains(&(c, r)), "keyhole ({c},{r}) must be lit");
         }
     }
 
@@ -1124,6 +1316,193 @@ mod tests {
         // the key is still Picking (the padlock renders released-white).
         snap.picking = true;
         assert_eq!(state_key(&snap), StateKey::Picking);
+    }
+
+    fn window(title: &str) -> crate::seam::WindowInfo {
+        crate::seam::WindowInfo {
+            identity: 1,
+            title: title.into(),
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+        }
+    }
+
+    fn game(title: &str, monitor_id: &str) -> crate::core::DetectedGameWindow {
+        crate::core::DetectedGameWindow {
+            identity: 1,
+            title: title.into(),
+            game_monitor_id: monitor_id.into(),
+            game_monitor_bounds: Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+        }
+    }
+
+    fn monitor(id: &str, w: i32, h: i32) -> crate::seam::MonitorInfo {
+        crate::seam::MonitorInfo {
+            id: id.into(),
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+            },
+        }
+    }
+
+    #[test]
+    fn panel_content_gives_the_status_lines_per_state() {
+        use crate::core;
+        let mut snap = core::LockSnapshot::default();
+        snap.foreground = Some(window("My Game"));
+        snap.game_window = Some(game("My Game", "MON1"));
+
+        // Titles keep their case here; the dot font uppercases at render.
+        let p = panel_content(&snap, StateKey::Released, false);
+        assert_eq!(p.padlock, Padlock::Solid);
+        assert_eq!(p.padlock_color, WHITE);
+        assert_eq!(p.status, ["LOCK: RELEASED", "My Game", "TARGET: MON1"]);
+        assert!(p.detail_rows.is_empty());
+
+        let p = panel_content(&snap, StateKey::Engaged, false);
+        assert_eq!(p.padlock, Padlock::Solid);
+        assert_eq!(p.padlock_color, ORANGE);
+        assert_eq!(p.status, ["LOCK: ENGAGED", "My Game", "TARGET: MON1"]);
+
+        let p = panel_content(&snap, StateKey::Suspended, false);
+        assert_eq!(p.padlock, Padlock::Hollow);
+        assert_eq!(p.padlock_color, ORANGE);
+        assert_eq!(p.status, ["LOCK: SUSPENDED", "My Game", "TARGET: MON1"]);
+
+        let p = panel_content(&snap, StateKey::Picking, false);
+        assert_eq!(p.padlock, Padlock::Solid);
+        assert_eq!(p.padlock_color, WHITE);
+        assert_eq!(
+            p.status,
+            ["PICKING MONITOR", "CLICK TO PIN", "ESC TO CANCEL"]
+        );
+    }
+
+    #[test]
+    fn panel_content_without_a_game_window_says_cursor_free() {
+        // No Game window, no pin: the cursor is simply free, the target is
+        // none.
+        let snap = crate::core::LockSnapshot::default();
+        let p = panel_content(&snap, StateKey::Released, false);
+        assert_eq!(p.status, ["LOCK: RELEASED", "CURSOR FREE", "TARGET: NONE"]);
+    }
+
+    #[test]
+    fn panel_content_detail_rows_only_while_open_and_in_order() {
+        use crate::core;
+        let mut snap = core::LockSnapshot::default();
+        snap.foreground = Some(window("My Game"));
+        snap.game_window = Some(game("My Game", "MON1"));
+        snap.monitors = vec![monitor("MON1", 1920, 1080), monitor("MON2", 1280, 1024)];
+        snap.clip_reasserts = 3;
+
+        let p = panel_content(&snap, StateKey::Engaged, false);
+        assert!(p.detail_rows.is_empty(), "DETAILS closed: no rows");
+
+        let p = panel_content(&snap, StateKey::Engaged, true);
+        assert_eq!(
+            p.detail_rows,
+            [
+                "FG: My Game",
+                "GAME: My Game",
+                "MONITORS: 2",
+                "MON1 1920x1080",
+                "MON2 1280x1024",
+                "CLIP REASSERTS: 3",
+            ]
+        );
+
+        // Zero re-asserts: no row for them.
+        snap.clip_reasserts = 0;
+        let p = panel_content(&snap, StateKey::Engaged, true);
+        assert_eq!(p.detail_rows.len(), 5);
+        assert!(!p.detail_rows.iter().any(|r| r.contains("REASSERTS")));
+    }
+
+    #[test]
+    fn panel_content_fits_the_rows_to_the_cell_budget() {
+        use crate::core;
+        let mut snap = core::LockSnapshot::default();
+        snap.foreground = Some(window("ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
+        snap.game_window = Some(game("Game", "MON1"));
+        // The 94-cell status row (col 34): 15 chars fit.
+        let p = panel_content(&snap, StateKey::Engaged, false);
+        assert_eq!(p.status[1], "ABCDEFGHIJKLMNO");
+        // The 120-cell detail row (col 8): 20 chars fit.
+        let p = panel_content(&snap, StateKey::Engaged, true);
+        assert_eq!(p.detail_rows[0], "FG: ABCDEFGHIJKLMNOP");
+    }
+
+    #[test]
+    fn foreground_line_reports_the_title_or_a_placeholder() {
+        use crate::core;
+        let none = core::LockSnapshot::default();
+        assert_eq!(foreground_line(&none), "NONE");
+        let mut empty = core::LockSnapshot::default();
+        empty.foreground = Some(window(""));
+        assert_eq!(foreground_line(&empty), "NO TITLE");
+        let mut titled = core::LockSnapshot::default();
+        titled.foreground = Some(window("My Game"));
+        assert_eq!(foreground_line(&titled), "My Game");
+    }
+
+    #[test]
+    fn target_line_prefers_the_pin_over_the_game_monitor() {
+        use crate::core;
+        let mut snap = core::LockSnapshot::default();
+        assert_eq!(target_line(&snap), "TARGET: NONE");
+        snap.game_window = Some(game("Game", "MON1"));
+        assert_eq!(target_line(&snap), "TARGET: MON1");
+        // The pin outlives a focus loss: while armed it names the target.
+        snap.pinned = Some(core::MonitorTarget {
+            monitor_id: "MON2".into(),
+            monitor_bounds: Rect {
+                x: 0,
+                y: 0,
+                width: 1280,
+                height: 1024,
+            },
+        });
+        assert_eq!(target_line(&snap), "TARGET: MON2");
+    }
+
+    #[test]
+    fn blend_toward_interpolates_rgb_and_keeps_the_source_alpha() {
+        let a: Rgba = [10, 20, 30, 255];
+        let b: Rgba = [110, 120, 230, 1];
+        assert_eq!(
+            blend_toward(a, b, 0.0),
+            [10, 20, 30, 255],
+            "t=0 is the source"
+        );
+        assert_eq!(
+            blend_toward(a, b, 1.0),
+            [110, 120, 230, 255],
+            "t=1 is the target's rgb, the source's alpha"
+        );
+        assert_eq!(blend_toward(a, b, 0.5), [60, 70, 130, 255], "the midpoint");
+    }
+
+    #[test]
+    fn dim_is_sixty_percent_toward_the_off_dot() {
+        // 60% of the way WHITE -> OFF: 232->116, 232->117, 236->122.
+        assert_eq!(dim(WHITE), [116, 117, 122, 255]);
+        // And from GREY: 136->77/78/82.
+        assert_eq!(dim(GREY), [77, 78, 82, 255]);
+        // Already at the target: unchanged.
+        assert_eq!(dim(OFF), OFF);
     }
 
     #[test]

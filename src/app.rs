@@ -121,11 +121,14 @@ impl eframe::App for MonitorLockApp {
 
         // The one-shot state-change wave: fresh on every state-key change
         // (250 ms, from the padlock centre, dots blending toward ORANGE),
-        // then the panel is static again.
+        // then the panel is static again. The first paint has no previous
+        // state — the panel appears without waving.
         let now = Instant::now();
         if self.prev_key != Some(key) {
+            if self.prev_key.is_some() {
+                self.wave_start = Some(now);
+            }
             self.prev_key = Some(key);
-            self.wave_start = Some(now);
         }
         let wave_t = self
             .wave_start
@@ -138,14 +141,8 @@ impl eframe::App for MonitorLockApp {
 
         // The panel content (padlock, the three status rows, the detail
         // rows) and the settled layout, in cells.
-        let (padlock, padlock_color, status, detail_rows) =
-            panel_content(&snap, key, self.details_open);
-        let (mut map, placed) = dotmatrix::layout(&dotmatrix::Panel {
-            padlock,
-            padlock_color,
-            status,
-            detail_rows,
-        });
+        let (mut map, placed) =
+            dotmatrix::layout(&dotmatrix::panel_content(&snap, key, self.details_open));
         let cols = map.cols();
         let rows = map.rows();
 
@@ -153,8 +150,13 @@ impl eframe::App for MonitorLockApp {
         // released while picking; a repeated start would be a no-op anyway).
         if snap.picking {
             let b = placed.buttons[0];
-            map.frame(b.col, b.row, b.w, b.h, dim(dotmatrix::GREY));
-            map.stamp_text("PICK", b.col + 2, b.row + 2, dim(dotmatrix::WHITE));
+            map.frame(b.col, b.row, b.w, b.h, dotmatrix::dim(dotmatrix::GREY));
+            map.stamp_text(
+                "PICK",
+                b.col + 2,
+                b.row + 2,
+                dotmatrix::dim(dotmatrix::WHITE),
+            );
         }
 
         // The wave: blend dots toward ORANGE by wave_intensity(d, t). The
@@ -170,7 +172,11 @@ impl eframe::App for MonitorLockApp {
                     let d = (dx * dx + dy * dy).sqrt() * 5.0;
                     let i = dotmatrix::wave_intensity(d, t);
                     if i > 0.0 {
-                        map.set(c, r, blend_toward(map.get(c, r), dotmatrix::ORANGE, i));
+                        map.set(
+                            c,
+                            r,
+                            dotmatrix::blend_toward(map.get(c, r), dotmatrix::ORANGE, i),
+                        );
                     }
                 }
             }
@@ -289,141 +295,6 @@ impl eframe::App for MonitorLockApp {
 fn exit_app() -> ! {
     win32::clear_clip();
     std::process::exit(0);
-}
-
-/// The panel content for one state: the padlock glyph and colour, the three
-/// status rows (fit to the 94 cells from col 34), and the detail rows (fit
-/// to the 120 cells from col 8, only while DETAILS is open). The dot font
-/// renders uppercase regardless, so no case change here.
-fn panel_content(
-    snap: &core::LockSnapshot,
-    key: dotmatrix::StateKey,
-    details_open: bool,
-) -> (dotmatrix::Padlock, dotmatrix::Rgba, [String; 3], Vec<String>) {
-    const STATUS_CELLS: u32 = 94; // col 34 of the 128-col grid
-    const DETAIL_CELLS: u32 = 120; // col 8 of the 128-col grid
-
-    let (padlock, padlock_color, rows3) = match key {
-        dotmatrix::StateKey::Picking => (
-            dotmatrix::Padlock::Solid,
-            dotmatrix::WHITE,
-            vec![
-                "PICKING MONITOR".to_string(),
-                "CLICK TO PIN".to_string(),
-                "ESC TO CANCEL".to_string(),
-            ],
-        ),
-        dotmatrix::StateKey::Engaged => (
-            dotmatrix::Padlock::Solid,
-            dotmatrix::ORANGE,
-            vec![
-                "LOCK: ENGAGED".to_string(),
-                foreground_line(snap),
-                target_line(snap),
-            ],
-        ),
-        dotmatrix::StateKey::Suspended => (
-            dotmatrix::Padlock::Hollow,
-            dotmatrix::ORANGE,
-            vec![
-                "LOCK: SUSPENDED".to_string(),
-                foreground_line(snap),
-                target_line(snap),
-            ],
-        ),
-        dotmatrix::StateKey::Released => (
-            dotmatrix::Padlock::Solid,
-            dotmatrix::WHITE,
-            vec![
-                "LOCK: RELEASED".to_string(),
-                // No Game window: the cursor is simply free.
-                if snap.game_window.is_some() {
-                    foreground_line(snap)
-                } else {
-                    "CURSOR FREE".to_string()
-                },
-                target_line(snap),
-            ],
-        ),
-    };
-    let status = [
-        dotmatrix::fit_width(&rows3[0], STATUS_CELLS),
-        dotmatrix::fit_width(&rows3[1], STATUS_CELLS),
-        dotmatrix::fit_width(&rows3[2], STATUS_CELLS),
-    ];
-    let detail_rows = if details_open {
-        detail_row_list(snap)
-            .into_iter()
-            .map(|r| dotmatrix::fit_width(&r, DETAIL_CELLS))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    (padlock, padlock_color, status, detail_rows)
-}
-
-/// The foreground window's title (status row 2, detail FG line): the title,
-/// "NO TITLE" for a window that reports none, "NONE" when there is no
-/// foreground window.
-fn foreground_line(snap: &core::LockSnapshot) -> String {
-    match &snap.foreground {
-        None => "NONE".to_string(),
-        Some(w) if w.title.is_empty() => "NO TITLE".to_string(),
-        Some(w) => w.title.clone(),
-    }
-}
-
-/// The target monitor's id (status row 3): the pinned monitor while an
-/// override is active (a pin outlives a focus loss), else the Game monitor;
-/// "TARGET: NONE" without either.
-fn target_line(snap: &core::LockSnapshot) -> String {
-    let id = snap
-        .pinned
-        .as_ref()
-        .map(|p| p.monitor_id.clone())
-        .or_else(|| snap.game_window.as_ref().map(|g| g.game_monitor_id.clone()));
-    match id {
-        Some(id) => format!("TARGET: {}", id),
-        None => "TARGET: NONE".to_string(),
-    }
-}
-
-/// The DETAILS diagnostic rows (dot-friendly): foreground, game, the
-/// monitor list, and the clip re-asserts (only while nonzero).
-fn detail_row_list(snap: &core::LockSnapshot) -> Vec<String> {
-    let mut rows = vec![
-        format!("FG: {}", foreground_line(snap)),
-        format!(
-            "GAME: {}",
-            match &snap.game_window {
-                None => "NONE".to_string(),
-                Some(g) if g.title.is_empty() => "NO TITLE".to_string(),
-                Some(g) => g.title.clone(),
-            }
-        ),
-        format!("MONITORS: {}", snap.monitors.len()),
-    ];
-    for m in &snap.monitors {
-        rows.push(format!("{} {}x{}", m.id, m.bounds.width, m.bounds.height));
-    }
-    if snap.clip_reasserts > 0 {
-        rows.push(format!("CLIP REASSERTS: {}", snap.clip_reasserts));
-    }
-    rows
-}
-
-/// Blend `a` toward `b` by `t` in [0,1] (the wave; the PICK dimming).
-fn blend_toward(a: dotmatrix::Rgba, b: dotmatrix::Rgba, t: f32) -> dotmatrix::Rgba {
-    let mut out = a;
-    for k in 0..3 {
-        out[k] = (a[k] as f32 + (b[k] as f32 - a[k] as f32) * t).round().min(255.0) as u8;
-    }
-    out
-}
-
-/// The PICK button's dim while picking: 60% toward the OFF dot colour.
-fn dim(c: dotmatrix::Rgba) -> dotmatrix::Rgba {
-    blend_toward(c, dotmatrix::OFF, 0.6)
 }
 
 /// Install the tray and menu event handlers. They run as soon as an event
