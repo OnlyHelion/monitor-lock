@@ -1,16 +1,22 @@
 # NEXT — Monitor Lock
-Updated: 2026-11-20 · implement-spec #8: all four tickets merged (code tip bf4a031), 95/95 green; code review done; fixer in flight
+Updated: 2026-11-20 · implement-spec #8: ALL done incl. code-review fixes (dot-matrix = 7ba61b3, code tip 101171b); 103/103 green, zero warnings; AWAITING USER HAND-CHECK
 
 ## Next step
-1. Fixer subagent running (ses_e0916b301ffet3MO1KP1vVD9kk): worktree `K:\wt\monitor-lock-review`, br `ticket/dot-matrix-review-fixes`, fixes F1-F7 (F1 move pure helpers to dotmatrix + tests + panel_content returns Panel; F2 glossary avoid-term in StateKey docs; F3 single-source layout consts; F4 unify (col,row) vs (row,col) convention; F5 overlay chaser helper; F6 hoist icon.rs consts; F7 no wave on first paint). When it reports: in `K:\monitor-lock` (on `dot-matrix`): `git merge --no-ff ticket/dot-matrix-review-fixes`, then full `cargo test` + `cargo build` (expect >=95 passed, 0 failed, zero warnings).
-2. Then report the integration branch to the user for HAND-CHECK (thin layer: window, overlay, icon destinations). Tickets stay open until the user confirms; closing is `gh issue close N --comment`. No PR (repo closes by direct master commits + v* tag).
-3. After user confirms: merge `dot-matrix` → master (fast-forward), bump version, tag v* per prior releases. Clean up worktrees `K:\wt\monitor-lock-9|10|11|12` + `K:\wt\monitor-lock-review`.
+1. User hand-checks the `dot-matrix` branch (checklist below). Tickets #8/#9/#10/#11/#12 stay OPEN until the user confirms; closing is `gh issue close N --comment`. If the hand-check finds a defect: fix in the review worktree flow (worktree from dot-matrix tip, merge --no-ff back, re-run full cargo test), re-ask.
+2. After user confirms: merge `dot-matrix` → master (fast-forward), bump version (0.1.3 → 0.2.0, design-language release), tag v* per prior releases, push. Then `git worktree remove` K:\wt\monitor-lock-9|10|11|12 + K:\wt\monitor-lock-review and delete the ticket branches.
+3. No PR (repo closes by direct master commits + v* tag).
+
+## Hand-check checklist (pre-checks all OK, awaiting user)
+- WINDOW (#11, 10-point list in ledger #11 entry): 640×400 non-resizable, title "Monitor Lock", off-dots across panel; ENGAGED solid orange padlock + "LOCK: ENGAGED"/fg title/"TARGET: <id>" all orange; RELEASED solid white + "LOCK: RELEASED"/"CURSOR FREE" or fg title; SUSPENDED (pinned, released) HOLLOW orange + "LOCK: SUSPENDED"; PICKING solid white + "PICKING MONITOR / CLICK TO PIN / ESC TO CANCEL", PICK dimmed+dead, AUTO/EXIT live; WAVE one-shot ~250 ms from padlock on every state change and NOT on first show (review fix F7); DETAILS click grows with FG/GAME/MONITORS/per-monitor/CLIP REASSERTS rows, click again shrinks; PICK/AUTO/EXIT work + pointing hand over enabled buttons; dots round/crisp at 100/125/150 % DPI; tray menu, icon swap, close-to-tray, clip re-assert unchanged.
+- PICKER (#10): dotted #FFB347 ring on hovered monitor (24 px inset/corners), two 7 px chasers opposite sides + 2 fading tail dots each, 6 s orbit (50 ms tick quantization by design), phase resets between monitors. Eyeball (mockup-derived, not ticket-pinned): tail radius 5 px, n = round(L/14) ring dots.
+- ICONS (#12): tray + title bar/Alt+Tab + taskbar in BOTH states (orange engaged / white released, live swap on state change); Explorer exe = engaged art only (by design); 16 px reads as a solid padlock blob (inherent at that scale).
+- Carried: hovering the Monitor Lock window can disturb the clip - close to tray for in-game checks. UNVERIFIED: pin-mode Alt+Tab release on this Win11 build (if it holds the lock, add the foreground class to is_shell_ui_class in src/win32.rs).
+- Review-fix notes for the eyeball: layout values byte-identical (F3), padlock rendering identical (F4), pixels unchanged except F7. 43 pre-existing cargo fmt violations in the base tree (no rustfmt pin/CI) - not fixed, not new.
 
 ## State now
-- `dot-matrix` (main worktree) = 5f34e47 (docs) / code tip bf4a031 = master 7c78680 + merges #9 (fa3fb1e) + #12 (3cb408e) + #10 (7893541) + #11 (bf4a031). Full `cargo test` = 95/95 (incl. real_system_*); `cargo build` zero warnings. Pre-check OK, awaiting user.
-- Code review BOTH axes in (ledger "Code-review" lines): Standards - no hard violations, judgement calls J1/J2 + smells S1-S5; Spec - no missing requirements, no scope creep, one minor (wave on first paint = F7).
-- Hand-check checklist owed (detail in ledger: #10/#12 entries + #11 10-point list; #9 section in `docs/ledgers/archive/monitor-lock-ticket-9-dotmatrix-2026-11-19.md`): window states + wave + DETAILS + DPI; picker ring/chasers (eyeball tail r5, n=round(L/14)); icons in all four destinations x both states.
-- UNVERIFIED (carried): pin-mode Alt+Tab release on this Win11 build; if Alt+Tab holds the lock, add the foreground class to `is_shell_ui_class` (src/win32.rs).
+- `dot-matrix` (main worktree) = 7ba61b3 (merge of review fixes) / code tip 101171b = master 7c78680 + merges #9 (fa3fb1e) + #12 (3cb408e) + #10 (7893541) + #11 (bf4a031) + review fixes (7ba61b3). Full `cargo test` in main worktree = 103/103 (incl. real_system_*); `cargo build` zero warnings.
+- Code review both axes + fixes recorded in ledger "Code-review" lines (F1-F7 all fixed, zero new fmt violations).
+- Worktrees: K:\wt\monitor-lock-9|10|11|12 (merged, remove after user confirms) + K:\wt\monitor-lock-review (merged 101171b, remove after user confirms). #11 wt's `target-local/` is a private throwaway dir (untracked).
 
 ## Don't retry
 - Shell commands containing an em dash are rejected by the portable shell scanner ("invalid-structure"), even inside here-strings - use ASCII hyphens.
@@ -21,4 +27,4 @@ Updated: 2026-11-20 · implement-spec #8: all four tickets merged (code tip bf4a
 
 ## Pointers
 - Spec/tickets: `gh issue view 8|9|10|11|12`. ADR 0001 + GLOSSARY + mockups in `docs/` (committed). Ledger: `docs/ledgers/monitor-lock.md` (code-review lines near top; grill-with-docs + ticket #9 sections in `docs/ledgers/archive/`). Remote: github.com/OnlyHelion/monitor-lock. Release: push a v* tag.
-- Build speed: worktrees share `$env:CARGO_TARGET_DIR="K:\monitor-lock\target"` (deps cached; cargo file-locks serialize concurrent builds - normal, don't kill). The #11 wt's `target-local/` is a private throwaway dir (untracked).
+- Build speed: worktrees share `$env:CARGO_TARGET_DIR="K:\monitor-lock\target"` (deps cached; cargo file-locks serialize concurrent builds - normal, don't kill).
