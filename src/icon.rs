@@ -27,6 +27,12 @@ const BEZEL: [u8; 3] = [88, 90, 110];
 /// The stand's neck, a shade lighter than the bezel.
 const NECK: [u8; 3] = [104, 106, 128];
 
+/// The dot panel in the screen: a centred square, side = the screen's height
+/// (u and v in 0..1 over the whole icon).
+const PANEL_TOP: f32 = 0.15; // the screen's top edge
+const PANEL_SIDE: f32 = 0.48; // the screen's height = the panel's side
+const PANEL_LEFT: f32 = 0.5 - PANEL_SIDE / 2.0; // centred
+
 /// The sizes packed into res/icon.ico (Explorer, taskbar and Alt+Tab pick
 /// the best fit per DPI and view).
 #[cfg(test)]
@@ -99,7 +105,7 @@ fn color_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> Option<[u8; 3]> {
 fn panel_cells(engaged: bool) -> [[u8; 3]; 18 * 18] {
     let lit = if engaged { LOCKED } else { FREE };
     let mut cells = [PANEL_OFF; 18 * 18];
-    for (row, col) in dotmatrix::padlock_cells(dotmatrix::Padlock::Solid) {
+    for (col, row) in dotmatrix::padlock_cells(dotmatrix::Padlock::Solid) {
         cells[(row * 18 + col) as usize] = lit;
     }
     cells
@@ -111,17 +117,14 @@ fn panel_cells(engaged: bool) -> [[u8; 3]; 18 * 18] {
 /// screen's height (the screen is wider than tall).
 fn panel_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> [u8; 3] {
     const N: u32 = 18;
-    const TOP: f32 = 0.15; // the screen's top edge
-    const SIDE: f32 = 0.48; // the screen's height = the panel's side
-    const LEFT: f32 = 0.5 - SIDE / 2.0;
-    if u < LEFT || u > LEFT + SIDE {
+    if u < PANEL_LEFT || u > PANEL_LEFT + PANEL_SIDE {
         return PANEL_BG; // the screen margin beside the square
     }
-    let pitch = SIDE / N as f32;
-    let col = (((u - LEFT) / pitch) as u32).min(N - 1);
-    let row = (((v - TOP) / pitch) as u32).min(N - 1);
-    let ox = u - (LEFT + col as f32 * pitch);
-    let oy = v - (TOP + row as f32 * pitch);
+    let pitch = PANEL_SIDE / N as f32;
+    let col = (((u - PANEL_LEFT) / pitch) as u32).min(N - 1);
+    let row = (((v - PANEL_TOP) / pitch) as u32).min(N - 1);
+    let ox = u - (PANEL_LEFT + col as f32 * pitch);
+    let oy = v - (PANEL_TOP + row as f32 * pitch);
     if dotmatrix::dot_at(ox, oy, pitch) {
         panel[(row * N + col) as usize]
     } else {
@@ -251,10 +254,7 @@ mod tests {
         // 0.26 to 0.74, v from 0.15 to 0.63, 18×18 cells.
         const S: u32 = 256;
         const N: u32 = 18;
-        const TOP: f32 = 0.15;
-        const SIDE: f32 = 0.48;
-        const LEFT: f32 = 0.5 - SIDE / 2.0; // centred, as in panel_at
-        let pitch = SIDE / N as f32;
+        let pitch = PANEL_SIDE / N as f32;
         let (engaged, released) = (rgba(S, true), rgba(S, false));
         let px = |u: f32, v: f32, img: &[u8]| -> [u8; 3] {
             let x = (u * S as f32) as u32;
@@ -263,7 +263,10 @@ mod tests {
             [img[i], img[i + 1], img[i + 2]]
         };
         let centre = |row: u32, col: u32| {
-            (LEFT + (col as f32 + 0.5) * pitch, TOP + (row as f32 + 0.5) * pitch)
+            (
+                PANEL_LEFT + (col as f32 + 0.5) * pitch,
+                PANEL_TOP + (row as f32 + 0.5) * pitch,
+            )
         };
         // A padlock body cell (not the keyhole): the solid padlock lit
         // locked-orange engaged, white released.
@@ -281,7 +284,7 @@ mod tests {
         // The panel background: the screen margin beside the square, and the
         // gap between two dots.
         assert_eq!(px(0.15, 0.39, &engaged), [14, 15, 19], "screen margin");
-        let (u, v) = (LEFT + pitch, TOP + 0.5 * pitch);
+        let (u, v) = (PANEL_LEFT + pitch, PANEL_TOP + 0.5 * pitch);
         assert_eq!(px(u, v, &engaged), [14, 15, 19], "gap between dots");
     }
 }
