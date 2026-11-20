@@ -33,6 +33,18 @@ const DOT_RATIO: f32 = 0.78;
 /// Picker ring inset from the monitor bounds, and the corner radius.
 const RING_INSET: f32 = 24.0;
 const RING_RADIUS: f32 = 24.0;
+/// The picker ring's dots: radius 5 px on 14 px arc spacing (ticket #10,
+/// mockup 08).
+pub const RING_DOT_RADIUS: f32 = 5.0;
+pub const RING_DOT_SPACING: f32 = 14.0;
+/// The orbiting chasers: radius 7 px (ticket #10).
+pub const CHASER_RADIUS: f32 = 7.0;
+/// A chaser's tail dots, nearest first: (distance behind in arc px, alpha).
+/// Same dot size as the ring, fading (ticket #10).
+pub const CHASER_TAILS: [(f32, u8); 2] = [(14.0, 102), (28.0, 51)];
+/// One chaser orbit takes 6 s — the app's only continuous animation
+/// (ticket #10, ADR 0001).
+pub const CHASER_PERIOD_SECS: f32 = 6.0;
 
 /// A cell coordinate: (col, row), column first.
 pub type Cell = (u32, u32);
@@ -479,6 +491,20 @@ pub fn ring_point(bounds: &crate::seam::Rect, s: f32) -> (f32, f32) {
     s -= side;
     let a = std::f32::consts::PI + s / r;
     (x0 + r + r * a.cos(), y0 + r + r * a.sin())
+}
+
+/// The chaser orbit phase in [0,1) from `uptime_secs` on the current monitor:
+/// one orbit per CHASER_PERIOD_SECS, so (uptime / period) mod 1. The uptime
+/// (not the wall clock) is the phase origin, so it resets when the hovered
+/// monitor changes (ticket #10).
+pub fn chaser_phase(uptime_secs: f32) -> f32 {
+    (uptime_secs / CHASER_PERIOD_SECS).rem_euclid(1.0)
+}
+
+/// How many ring dots close the ring at ~RING_DOT_SPACING arc spacing:
+/// round(L / 14), so the last dot lands back at the start (ticket #10).
+pub fn ring_dot_count(bounds: &crate::seam::Rect) -> u32 {
+    (ring_length(bounds) / RING_DOT_SPACING).round().max(1.0) as u32
 }
 
 /// Stamp an anti-aliased "real dot" of radius `rad` centred at (cx, cy) with
@@ -963,5 +989,44 @@ mod tests {
         let (x, y) = ring_point(&b, 3.0 * l / 4.0);
         assert!((y - 276.0).abs() < 1e-3, "3/4 around is on the bottom edge, y={y}");
         assert!(x > 48.0 && x < 352.0, "3/4 around is between the bottom corners, x={x}");
+    }
+
+    #[test]
+    fn chaser_phase_wraps_on_the_6_second_orbit() {
+        // Ticket #10: the chasers orbit with a 6 s period, so the phase is
+        // (uptime / 6) mod 1, in [0, 1), from uptime on the current monitor.
+        assert!((chaser_phase(0.0) - 0.0).abs() < 1e-6, "t=0 is phase 0");
+        assert!((chaser_phase(3.0) - 0.5).abs() < 1e-6, "half a period is 0.5");
+        assert!((chaser_phase(6.0) - 0.0).abs() < 1e-6, "one full period wraps to 0");
+        assert!((chaser_phase(9.0) - 0.5).abs() < 1e-6, "1.5 periods is 0.5");
+        // A long picker session must not drift: 1000 orbits plus half.
+        assert!((chaser_phase(6003.0) - 0.5).abs() < 1e-4, "6003 s is 0.5");
+        // Always in [0, 1), increasing within one period.
+        for i in 0..12 {
+            let p = chaser_phase(i as f32);
+            assert!(p >= 0.0 && p < 1.0, "t={i}: phase {p} out of range");
+        }
+        assert!(
+            chaser_phase(1.0) < chaser_phase(2.0) && chaser_phase(2.0) < chaser_phase(5.0),
+            "phase must increase within a period"
+        );
+    }
+
+    #[test]
+    fn ring_dot_count_closes_the_ring_at_14_px_spacing() {
+        // 400x300 bounds: ring box (24,24)-(376,276), L = 2*304 + 2*204 +
+        // 2*pi*24 ~= 1166.796, so L/14 ~= 83.34 -> 83 dots.
+        let b = ring_bounds();
+        let n = ring_dot_count(&b);
+        assert_eq!(n, 83, "400x300 bounds");
+        let achieved = ring_length(&b) / n as f32;
+        assert!((achieved - 14.0).abs() < 0.2, "achieved spacing {achieved}");
+        // A real monitor: 1920x1080 -> top=1824, side=984, L ~= 5766.796,
+        // L/14 ~= 411.91 -> 412 dots.
+        let m = Rect { x: 0, y: 0, width: 1920, height: 1080 };
+        let nm = ring_dot_count(&m);
+        assert_eq!(nm, 412, "1920x1080 bounds");
+        let achieved = ring_length(&m) / nm as f32;
+        assert!((achieved - 14.0).abs() < 0.2, "achieved spacing {achieved}");
     }
 }
