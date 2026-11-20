@@ -23,12 +23,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, ClipCursor, CreateIcon, DispatchMessageW, EnumWindows, GA_ROOT, GetAncestor, GetClassNameW,
-    GetClipCursor, GetCursorPos, GetForegroundWindow, GetMessageW, GetShellWindow,
-    GetSystemMetrics, GetWindowRect, HICON, ICON_BIG, ICON_SMALL, GetWindowTextW, GetWindowThreadProcessId, MSG, MSLLHOOKSTRUCT,
-    SM_CXICON, SM_CXSMICON, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_HIDE,
-    SW_SHOWNORMAL, SendMessageW, SetCursorPos, SetForegroundWindow, SetWindowsHookExW, ShowWindow,
-    TranslateMessage, WH_MOUSE_LL, WM_MOUSEMOVE, WM_SETICON, WindowFromPoint,
+    CallNextHookEx, ClipCursor, CreateIcon, DispatchMessageW, EnumWindows, GA_ROOT, GetAncestor,
+    GetClassNameW, GetClipCursor, GetCursorPos, GetForegroundWindow, GetMessageW, GetShellWindow,
+    GetSystemMetrics, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, HICON, ICON_BIG,
+    ICON_SMALL, MSG, MSLLHOOKSTRUCT, SM_CXICON, SM_CXSMICON, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_HIDE, SW_SHOWNORMAL, SendMessageW,
+    SetCursorPos, SetForegroundWindow, SetWindowsHookExW, ShowWindow, TranslateMessage,
+    WH_MOUSE_LL, WM_MOUSEMOVE, WM_SETICON, WindowFromPoint,
 };
 
 /// Release any cursor clip. `ClipCursor(NULL)` is the Win32 way: there is no
@@ -397,7 +398,12 @@ pub fn set_main_window_icon(engaged: bool) {
     for (kind, icon) in [(ICON_SMALL, small), (ICON_BIG, big)] {
         if icon != 0 {
             unsafe {
-                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon)));
+                SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    Some(WPARAM(kind as usize)),
+                    Some(LPARAM(icon)),
+                );
             }
         }
     }
@@ -413,7 +419,16 @@ fn create_icon(size: u32, engaged: bool) -> Option<HICON> {
     // 1bpp mask rows are WORD-aligned.
     let mask = vec![0u8; (size.div_ceil(16) * 2 * size) as usize];
     unsafe {
-        CreateIcon(None, size as i32, size as i32, 1, 32, mask.as_ptr(), bgra.as_ptr()).ok()
+        CreateIcon(
+            None,
+            size as i32,
+            size as i32,
+            1,
+            32,
+            mask.as_ptr(),
+            bgra.as_ptr(),
+        )
+        .ok()
     }
 }
 

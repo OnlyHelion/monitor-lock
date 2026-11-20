@@ -130,14 +130,9 @@ impl eframe::App for MonitorLockApp {
             }
             self.prev_key = Some(key);
         }
-        let wave_t = self
-            .wave_start
-            .and_then(|start| {
-                dotmatrix::wave_progress(
-                    now.duration_since(start).as_millis(),
-                    dotmatrix::WAVE_MS,
-                )
-            });
+        let wave_t = self.wave_start.and_then(|start| {
+            dotmatrix::wave_progress(now.duration_since(start).as_millis(), dotmatrix::WAVE_MS)
+        });
 
         // The panel content (padlock, the three status rows, the detail
         // rows) and the settled layout, in cells.
@@ -204,10 +199,7 @@ impl eframe::App for MonitorLockApp {
             let tex = ctx.load_texture_cached(
                 "dot-panel",
                 egui::Id::unique("dot-panel"),
-                egui::ColorImage::from_rgba_unmultiplied(
-                    [tex_w as usize, tex_h as usize],
-                    &rgba,
-                ),
+                egui::ColorImage::from_rgba_unmultiplied([tex_w as usize, tex_h as usize], &rgba),
                 Default::default(),
             );
             ui.painter().image(
@@ -222,19 +214,17 @@ impl eframe::App for MonitorLockApp {
             // pitch in points.
             let (hit, clicked) = ctx.input(|i| {
                 (
-                    i.pointer
-                        .interact_pos()
-                        .and_then(|p| {
-                            let local = p - rect.min;
-                            dotmatrix::cell_at(
-                                local.x,
-                                local.y,
-                                rect.width() / cols as f32,
-                                rect.height() / rows as f32,
-                                cols,
-                                rows,
-                            )
-                        }),
+                    i.pointer.interact_pos().and_then(|p| {
+                        let local = p - rect.min;
+                        dotmatrix::cell_at(
+                            local.x,
+                            local.y,
+                            rect.width() / cols as f32,
+                            rect.height() / rows as f32,
+                            cols,
+                            rows,
+                        )
+                    }),
                     i.pointer.primary_clicked(),
                 )
             });
@@ -274,19 +264,18 @@ impl eframe::App for MonitorLockApp {
         let want_h = rows as f32 * 5.0;
         if (want_h - self.inner_h).abs() > f32::EPSILON {
             self.inner_h = want_h;
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                640.0,
-                want_h,
-            )));
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(640.0, want_h)));
         }
 
         // Live-updates: the wave animates at ~16 ms; otherwise the poll
         // cadence.
-        ui.ctx().request_repaint_after(Duration::from_millis(if wave_t.is_some() {
-            16
-        } else {
-            100
-        }));
+        ui.ctx()
+            .request_repaint_after(Duration::from_millis(if wave_t.is_some() {
+                16
+            } else {
+                100
+            }));
     }
 }
 

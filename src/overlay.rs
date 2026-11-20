@@ -185,7 +185,9 @@ impl PickerOverlay {
         }
         let (w, h) = (self.w, self.h);
         let l = dotmatrix::ring_length(bounds);
-        let uptime = self.up_since.map_or(0.0, |since| since.elapsed().as_secs_f32());
+        let uptime = self
+            .up_since
+            .map_or(0.0, |since| since.elapsed().as_secs_f32());
         let phase = dotmatrix::chaser_phase(uptime);
         let buf = unsafe {
             core::slice::from_raw_parts_mut(self.pixels, (w as usize) * (h as usize) * 4)

@@ -15,9 +15,9 @@
 
 mod core;
 mod dotmatrix;
-mod icon;
 #[cfg(test)]
 mod fake;
+mod icon;
 mod seam;
 #[cfg(windows)]
 mod win32;

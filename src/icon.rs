@@ -19,9 +19,17 @@ use crate::dotmatrix;
 const PANEL_BG: [u8; 3] = [dotmatrix::BG[0], dotmatrix::BG[1], dotmatrix::BG[2]];
 const PANEL_OFF: [u8; 3] = [dotmatrix::OFF[0], dotmatrix::OFF[1], dotmatrix::OFF[2]];
 /// The padlock, engaged (locked orange).
-const LOCKED: [u8; 3] = [dotmatrix::ORANGE[0], dotmatrix::ORANGE[1], dotmatrix::ORANGE[2]];
+const LOCKED: [u8; 3] = [
+    dotmatrix::ORANGE[0],
+    dotmatrix::ORANGE[1],
+    dotmatrix::ORANGE[2],
+];
 /// The padlock, released (white).
-const FREE: [u8; 3] = [dotmatrix::WHITE[0], dotmatrix::WHITE[1], dotmatrix::WHITE[2]];
+const FREE: [u8; 3] = [
+    dotmatrix::WHITE[0],
+    dotmatrix::WHITE[1],
+    dotmatrix::WHITE[2],
+];
 /// The bezel and the stand's base: dark slate.
 const BEZEL: [u8; 3] = [88, 90, 110];
 /// The stand's neck, a shade lighter than the bezel.
@@ -271,8 +279,16 @@ mod tests {
         // A padlock body cell (not the keyhole): the solid padlock lit
         // locked-orange engaged, white released.
         let (u, v) = centre(13, 8);
-        assert_eq!(px(u, v, &engaged), [255, 179, 71], "padlock lit orange when engaged");
-        assert_eq!(px(u, v, &released), [232, 232, 236], "padlock lit white when released");
+        assert_eq!(
+            px(u, v, &engaged),
+            [255, 179, 71],
+            "padlock lit orange when engaged"
+        );
+        assert_eq!(
+            px(u, v, &released),
+            [232, 232, 236],
+            "padlock lit white when released"
+        );
         // An off-dot cell (the padlock starts at row 2): the off-dot colour in
         // both states.
         let (u, v) = centre(0, 0);
