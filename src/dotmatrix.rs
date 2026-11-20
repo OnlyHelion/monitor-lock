@@ -551,6 +551,18 @@ pub fn stamp_dot(buf: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, rad:
     }
 }
 
+/// Whether the local point (ox, oy) in a cell of pitch `pitch` (both in
+/// [0, pitch), from the cell's top-left corner) is inside the "real dot": the
+/// superellipse |x/a|⁴ + |y/a|⁴ ≤ 1, a = 0.39×pitch, centred in the cell.
+/// The same inequality `render`'s LUT and `stamp_dot` supersample — the icon
+/// counts 4×4 subsamples of it instead of building a per-pixel coverage LUT.
+pub fn dot_at(ox: f32, oy: f32, pitch: f32) -> bool {
+    let a = pitch * DOT_RATIO / 2.0;
+    let dx = (ox - pitch / 2.0).abs() / a;
+    let dy = (oy - pitch / 2.0).abs() / a;
+    dx * dx * dx * dx + dy * dy * dy * dy <= 1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,6 +900,23 @@ mod tests {
         // The boundary is a partial alpha blend.
         let edge = px(&buf, 20, 14, 10);
         assert!(edge[3] > 0 && edge[3] < 255, "boundary is partial: {edge:?}");
+    }
+
+    #[test]
+    fn dot_at_matches_the_real_dot_shape() {
+        // The cell centre is inside; the cell corner is outside.
+        let p = 10.0;
+        assert!(dot_at(p / 2.0, p / 2.0, p), "centre");
+        assert!(!dot_at(0.0, 0.0, p), "corner");
+        // The on-axis half-width is a = 0.39×pitch (the settled constant).
+        assert!(dot_at(p / 2.0 + 0.389 * p, p / 2.0, p), "within 0.389×pitch");
+        assert!(!dot_at(p / 2.0 + 0.391 * p, p / 2.0, p), "beyond 0.391×pitch");
+        // On the diagonal the superellipse edge (2^(−1/4)·a) reaches further
+        // than a circle of radius a (0.707·a): 0.8408·a is inside, 0.9·a is
+        // outside (2·0.9⁴ > 1).
+        let a = 0.39 * p;
+        assert!(dot_at(p / 2.0 + 0.8408 * a, p / 2.0 + 0.8408 * a, p), "diagonal near edge");
+        assert!(!dot_at(p / 2.0 + 0.9 * a, p / 2.0 + 0.9 * a, p), "diagonal beyond edge");
     }
 
     #[test]
