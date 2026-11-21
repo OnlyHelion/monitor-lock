@@ -67,5 +67,5 @@ The suspended state of the padlock glyph: the outline only, in the same orange a
 _Avoid_: outline mode, ghost, disabled
 
 **Wave**:
-The one-shot (≤300 ms) state-change animation: a ring radiating from the padlock across the Dot-matrix panel in which each dot steps through a few discrete orange levels (no smooth gradient), then static.
+The one-shot (≤300 ms) state-change animation: a ring radiating from the padlock across the Dot-matrix panel in which each dot steps through a few discrete levels (no smooth gradient), then static. Orange when the Lock engages from released or picking; white when the state goes to released from engaged, suspended or picking; none for suspended in or out, entering picking, or on first show.
 _Avoid_: sweep, ripple, transition

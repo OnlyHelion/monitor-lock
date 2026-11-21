@@ -80,6 +80,8 @@ pub struct MonitorLockApp {
     pub(crate) cmd_tx: mpsc::Sender<UiCommand>,
     /// When the one-shot state-change wave started (None: not playing).
     pub(crate) wave_start: Option<Instant>,
+    /// The colour of the wave now playing (set with `wave_start`).
+    pub(crate) wave_colour: dotmatrix::WaveColour,
     /// The last rendered state key (a change starts a fresh wave).
     pub(crate) prev_key: Option<dotmatrix::StateKey>,
     /// The DETAILS diagnostic rows are shown (the window grows with them).
@@ -114,14 +116,19 @@ impl eframe::App for MonitorLockApp {
         let snap = self.shared.lock().unwrap().clone();
         let key = dotmatrix::state_key(&snap);
 
-        // The one-shot state-change wave: fresh on every state-key change
-        // (250 ms, from the padlock centre, dots blending toward ORANGE),
-        // then the panel is static again. The first paint has no previous
+        // The one-shot state-change wave: fresh on a state-key change that
+        // dotmatrix::wave_colour maps to a wave (250 ms, from the padlock
+        // centre, dots blending toward ORANGE or WHITE), then the panel is
+        // static again. The first paint has no previous
         // state — the panel appears without waving.
         let now = Instant::now();
         if self.prev_key != Some(key) {
-            if self.prev_key.is_some() {
+            if let Some(colour) = self
+                .prev_key
+                .and_then(|prev| dotmatrix::wave_colour(prev, key))
+            {
                 self.wave_start = Some(now);
+                self.wave_colour = colour;
             }
             self.prev_key = Some(key);
         }
@@ -150,10 +157,14 @@ impl eframe::App for MonitorLockApp {
         }
 
         // The wave: each dot steps to a discrete level (wave_level(d, t)),
-        // blended toward ORANGE by that level only. The
+        // blended toward the wave colour (ORANGE or WHITE) by that level only. The
         // formula's distances are 1x-pitch px, so 5 px per cell; the padlock
         // centre is (8+9, 21+9) in cell units.
         if let Some(t) = wave_t {
+            let target = match self.wave_colour {
+                dotmatrix::WaveColour::Orange => dotmatrix::ORANGE,
+                dotmatrix::WaveColour::White => dotmatrix::WHITE,
+            };
             let (pc, pr) = placed.padlock;
             let (pc, pr) = (pc as f32 + 9.0, pr as f32 + 9.0);
             for r in 0..rows {
@@ -168,7 +179,7 @@ impl eframe::App for MonitorLockApp {
                             r,
                             dotmatrix::blend_toward(
                                 map.get(c, r),
-                                dotmatrix::ORANGE,
+                                target,
                                 dotmatrix::wave_level_blend(level),
                             ),
                         );

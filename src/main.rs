@@ -192,6 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state_rx,
                 cmd_tx,
                 wave_start: None,
+                wave_colour: dotmatrix::WaveColour::Orange,
                 prev_key: None,
                 details_open: false,
                 inner_h: 400.0,
