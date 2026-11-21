@@ -441,13 +441,16 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
     const DETAIL_STEP: u32 = 9; // TEXT_ROWS + 2 blank dot-rows, like the status rows
     const TEXT_ROWS: u32 = 7; // the 5×7 font's row height
     // The frameless title strip: the rows above the first separator. The
-    // controls are 11×11 frames centred on the heading text (rows 7..14),
-    // the close at the heading's 8-cell margin from the right edge.
+    // controls are 11×11 frames vertically centred on the heading text (7
+    // glyph rows 7..=13, centre 10.5; frames rows 5..=15, centre 10.5), so
+    // they sit on the heading's line rather than the strip's geometric centre.
     const STRIP_H: u32 = SEP_ROWS[0];
     const CTRL_SIZE: u32 = 11;
     const CTRL_ROW: u32 = 5;
-    const CLOSE_COL: u32 = PANEL_COLS - 8 - CTRL_SIZE;
-    const MINIMISE_COL: u32 = CLOSE_COL - 3 - CTRL_SIZE;
+    const CTRL_RIGHT_MARGIN: u32 = 8; // same as the heading's left margin
+    const CTRL_GAP: u32 = 3; // between minimise and close
+    const CLOSE_COL: u32 = PANEL_COLS - CTRL_RIGHT_MARGIN - CTRL_SIZE;
+    const MINIMISE_COL: u32 = CLOSE_COL - CTRL_GAP - CTRL_SIZE;
 
     let n = content.detail_rows.len() as u32;
     // The closed panel is the 128×80 grid (640×400 at pitch 5); detail rows
@@ -482,12 +485,19 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
         map.frame(bx, BUTTON_ROW, BUTTON_W, BUTTON_H, GREY);
         map.stamp_text(label, bx + 2, BUTTON_ROW + 2, WHITE);
     }
-    for col in [MINIMISE_COL, CLOSE_COL] {
-        map.frame(col, CTRL_ROW, CTRL_SIZE, CTRL_SIZE, GREY);
+    let ctrl = |col| ButtonRect {
+        col,
+        row: CTRL_ROW,
+        w: CTRL_SIZE,
+        h: CTRL_SIZE,
+    };
+    let (minimise, close) = (ctrl(MINIMISE_COL), ctrl(CLOSE_COL));
+    for b in [&minimise, &close] {
+        map.frame(b.col, b.row, b.w, b.h, GREY);
     }
     // Minimise: a 5-wide bar on the glyph's bottom row; close: the X glyph.
-    map.hline(CTRL_ROW + 8, MINIMISE_COL + 3, MINIMISE_COL + 7, WHITE);
-    map.stamp_text("X", CLOSE_COL + 3, CTRL_ROW + 2, WHITE);
+    map.hline(minimise.row + 8, minimise.col + 3, minimise.col + 7, WHITE);
+    map.stamp_text("X", close.col + 3, close.row + 2, WHITE);
     map.stamp_text("DETAILS", DETAILS.0, DETAILS.1, SOFT);
     for (i, row) in content.detail_rows.iter().enumerate() {
         map.stamp_text(
@@ -537,18 +547,8 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
             w: PANEL_COLS,
             h: STRIP_H,
         },
-        minimise: ButtonRect {
-            col: MINIMISE_COL,
-            row: CTRL_ROW,
-            w: CTRL_SIZE,
-            h: CTRL_SIZE,
-        },
-        close: ButtonRect {
-            col: CLOSE_COL,
-            row: CTRL_ROW,
-            w: CTRL_SIZE,
-            h: CTRL_SIZE,
-        },
+        minimise,
+        close,
     };
     (map, placed)
 }
@@ -896,6 +896,12 @@ pub fn foreground_line(snap: &crate::core::LockSnapshot) -> String {
     }
 }
 
+/// A Win32 monitor id (\\.\DISPLAYn) without its device prefix, so the
+/// rows that show it fit the dot grid's cell budgets.
+fn short_monitor_id(id: &str) -> &str {
+    id.strip_prefix(r"\\.\").unwrap_or(id)
+}
+
 /// The target monitor's id (status row 3): the pinned monitor while an
 /// override is active (a pin outlives a focus loss), else the Game monitor;
 /// "TARGET: NONE" without either.
@@ -906,7 +912,7 @@ pub fn target_line(snap: &crate::core::LockSnapshot) -> String {
         .map(|p| p.monitor_id.clone())
         .or_else(|| snap.game_window.as_ref().map(|g| g.game_monitor_id.clone()));
     match id {
-        Some(id) => format!("TARGET: {}", id),
+        Some(id) => format!("TARGET: {}", short_monitor_id(&id)),
         None => "TARGET: NONE".to_string(),
     }
 }
@@ -927,7 +933,12 @@ pub fn detail_row_list(snap: &crate::core::LockSnapshot) -> Vec<String> {
         format!("MONITORS: {}", snap.monitors.len()),
     ];
     for m in &snap.monitors {
-        rows.push(format!("{} {}x{}", m.id, m.bounds.width, m.bounds.height));
+        rows.push(format!(
+            "{} {}x{}",
+            short_monitor_id(&m.id),
+            m.bounds.width,
+            m.bounds.height
+        ));
     }
     if snap.clip_reasserts > 0 {
         rows.push(format!("CLIP REASSERTS: {}", snap.clip_reasserts));
@@ -1359,7 +1370,8 @@ mod tests {
         // The strip is the top 17 rows (above the first separator), full width.
         assert_eq!(placed.title_strip, rect(0, 0, 128, 17));
         // Close: 11x11, right margin 8 like the heading's left margin;
-        // minimise 3 cells to its left; both centred on the heading text.
+        // minimise 3 cells to its left; both centred on the heading text
+        // (rows 7..=13 centre 10.5, frames rows 5..=15 centre 10.5).
         assert_eq!(placed.close, rect(109, 5, 11, 11));
         assert_eq!(placed.minimise, rect(95, 5, 11, 11));
         // Frames are grey like the other buttons.
@@ -1431,21 +1443,28 @@ mod tests {
     fn layout_grown_height_follows_the_detail_count() {
         let rows = |n: usize| layout(&engaged_panel(vec!["FG: A"; n])).0.rows();
         assert_eq!(rows(0), 80, "closed grid unchanged");
-        assert_eq!(rows(1), 78 + 7 + 4);
-        assert_eq!(rows(7), 78 + 6 * 9 + 7 + 4); // 143 rows = 715 pt
+        let (_, p) = layout(&engaged_panel(vec![]));
+        let (origin_row, step) = (p.detail_origin.1, p.detail_step);
+        // The last text row ends 7 rows below its origin, plus the 4-row margin.
+        let expect = |n: u32| origin_row + (n - 1) * step + 7 + 4;
+        assert_eq!(rows(1), expect(1));
+        assert_eq!(rows(7), expect(7)); // 143 rows = 715 pt at 5 pt/row
     }
 
     #[test]
     fn layout_detail_lines_never_overlap_and_are_not_clipped() {
         // Longest realistic rows: 20 widest glyphs each, 7 lines.
+        const LINES: usize = 7;
         let long = "W".repeat(40);
-        let rows: Vec<String> = (0..7).map(|_| long.clone()).collect();
-        let snap_rows: Vec<String> = rows.iter().map(|r| fit_width(r, 120)).collect();
+        let rows: Vec<String> = (0..LINES).map(|_| long.clone()).collect();
+        let fitted: Vec<String> = rows.iter().map(|r| fit_width(r, 120)).collect();
+        let fitted_len = fitted[0].chars().count();
+        assert_eq!(fitted_len, 20, "120 cells hold 20 widest glyphs");
         let panel = Panel {
             padlock: Padlock::Solid,
             padlock_color: ORANGE,
             status: ["A".into(), "B".into(), "C".into()],
-            detail_rows: snap_rows,
+            detail_rows: fitted,
         };
         let (map, placed) = layout(&panel);
         // At least one blank dot-row between consecutive lines.
@@ -1453,14 +1472,16 @@ mod tests {
         // Every line's last glyph column and last glyph row are inside the
         // grid (640 pt wide = 128 cols; no clipping at right or bottom).
         assert_eq!(map.cols(), 128);
-        let last_col = placed.detail_origin.0 + 6 * 19 + 4;
+        // Each glyph advances 6 cells; the last one is 5 wide.
+        let last_col = placed.detail_origin.0 + (fitted_len as u32 - 1) * 6 + 4;
         assert!(last_col < map.cols(), "longest row clipped at the right");
-        let last_row = placed.detail_origin.1 + 6 * placed.detail_step + 6;
+        let last_line = LINES as u32 - 1;
+        let last_row = placed.detail_origin.1 + last_line * placed.detail_step + 6;
         assert!(last_row < map.rows(), "last row clipped at the bottom");
         // The rightmost cell of the longest row's last glyph is lit.
         assert_ne!(map.get(last_col, placed.detail_origin.1 + 6), OFF);
         // Between lines, the gap rows stay dark.
-        for i in 0..6 {
+        for i in 0..last_line {
             let gap = placed.detail_origin.1 + i * placed.detail_step + 7;
             for c in 8..128 {
                 assert_eq!(map.get(c, gap), OFF, "gap row {gap} col {c}");
@@ -1963,6 +1984,31 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(foreground_line(&titled), "My Game");
+    }
+
+    #[test]
+    fn real_monitor_ids_fit_the_detail_and_status_budgets() {
+        use crate::core;
+        // Win32 ids are `\\.\DISPLAYn`; the device prefix is dropped so the
+        // longest realistic rows are not cut by it_width.
+        let mut snap = core::LockSnapshot {
+            game_window: Some(game("Game", r"\\.\DISPLAY12")),
+            ..Default::default()
+        };
+        assert_eq!(target_line(&snap), "TARGET: DISPLAY12");
+        snap.monitors = vec![crate::seam::MonitorInfo {
+            id: r"\\.\DISPLAY12".into(),
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                width: 3840,
+                height: 2160,
+            },
+        }];
+        let rows = detail_row_list(&snap);
+        let mon = rows.last().unwrap();
+        assert_eq!(mon, "DISPLAY12 3840x2160");
+        assert_eq!(fit_width(mon, 120), *mon, "20 chars fit 120 cells");
     }
 
     #[test]

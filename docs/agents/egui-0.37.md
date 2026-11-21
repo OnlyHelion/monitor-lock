@@ -18,5 +18,5 @@ The window is one texture (ADR 0001): `src/app.rs` renders the dot panel to RGBA
 | Close to tray | `ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose)` |
 | Window setup (`main.rs`) | `ViewportBuilder::default().with_inner_size([640.0, 400.0]).with_resizable(false).with_decorations(false)` (frameless, #15) |
 | Taskbar / title icon | `win32::set_main_window_icon`, not `ViewportCommand::Icon` (that one doesn't reach the taskbar). |
-| Drag frameless window | `ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag)` on `i.pointer.primary_pressed()` (unverified on screen) |
-| Minimise | `ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))` |
+| Drag frameless window | `ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag)` on `i.pointer.primary_pressed()` (signature verified against `egui-0.37.0/src/viewport.rs`: unit variant `StartDrag`, which only works if the left button was pressed just before; on-screen behaviour still unverified) |
+| Minimise | `ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))` (`Minimized(bool)` verified against `egui-0.37.0/src/viewport.rs`; on-screen behaviour unverified) |
