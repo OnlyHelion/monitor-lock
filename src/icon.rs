@@ -1,6 +1,6 @@
-//! The app icon: a monitor whose screen is an 18×18 dot panel showing the
-//! Lock state — the solid padlock lit locked-orange when engaged, white when
-//! released. Pure pixel art (no Win32), so it is drawn at any size and
+//! The app icon: the dot-matrix padlock panel and nothing else — a dark
+//! rounded tile of 18×18 dots with the solid padlock lit locked-orange when
+//! engaged, white when released. No monitor silhouette. Pure pixel art (no Win32), so it is drawn at any size and
 //! unit-tested.
 //!
 //! One source for every place the icon appears: the tray (swapped on state
@@ -30,16 +30,12 @@ const FREE: [u8; 3] = [
     dotmatrix::WHITE[1],
     dotmatrix::WHITE[2],
 ];
-/// The bezel and the stand's base: dark slate.
-const BEZEL: [u8; 3] = [88, 90, 110];
-/// The stand's neck, a shade lighter than the bezel.
-const NECK: [u8; 3] = [104, 106, 128];
-
-/// The dot panel in the screen: a centred square, side = the screen's height
-/// (u and v in 0..1 over the whole icon).
-const PANEL_TOP: f32 = 0.15; // the screen's top edge
-const PANEL_SIDE: f32 = 0.48; // the screen's height = the panel's side
+/// The tile: the dark panel covering the whole icon, rounded corners
+/// (transparent outside). The 18×18 dot grid is a centred square inside it.
+const TILE_RADIUS: f32 = 0.14;
+const PANEL_SIDE: f32 = 0.88; // the grid's side
 const PANEL_LEFT: f32 = 0.5 - PANEL_SIDE / 2.0; // centred
+const PANEL_TOP: f32 = PANEL_LEFT;
 
 /// The sizes packed into res/icon.ico (Explorer, taskbar and Alt+Tab pick
 /// the best fit per DPI and view).
@@ -81,27 +77,11 @@ pub fn rgba(size: u32, engaged: bool) -> Vec<u8> {
     out
 }
 
-/// The color at normalized point (u, v) in 0..1, or None (transparent).
-/// Shapes are painted back to front: the topmost hit wins.
+/// The color at normalized point (u, v) in 0..1, or None (transparent
+/// outside the tile's rounded corners).
 fn color_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> Option<[u8; 3]> {
-    // Screen area (inside the bezel): the 18×18 dot panel.
-    if in_round_rect(u, v, 0.10, 0.15, 0.90, 0.63, 0.015) {
+    if in_round_rect(u, v, 0.0, 0.0, 1.0, 1.0, TILE_RADIUS) {
         return Some(panel_at(u, v, panel));
-    }
-    // Bezel.
-    if in_round_rect(u, v, 0.02, 0.07, 0.98, 0.76, 0.07) {
-        return Some(BEZEL);
-    }
-    // Neck: a trapezoid widening downward.
-    if (0.76..0.87).contains(&v) {
-        let t = (v - 0.76) / 0.11;
-        if (u - 0.5).abs() < 0.10 + 0.04 * t {
-            return Some(NECK);
-        }
-    }
-    // Base.
-    if in_round_rect(u, v, 0.26, 0.86, 0.74, 0.93, 0.02) {
-        return Some(BEZEL);
     }
     None
 }
@@ -119,14 +99,17 @@ fn panel_cells(engaged: bool) -> [[u8; 3]; 18 * 18] {
     cells
 }
 
-/// The dot panel in the screen: the panel background with an 18×18 grid of
+/// The tile's colour at (u, v): the panel background with an 18×18 grid of
 /// "real dots" (the same superellipse dotmatrix.rs renders) — the padlock
-/// lit, every other dot off. The panel is a centred square, side = the
-/// screen's height (the screen is wider than tall).
+/// lit, every other dot off. The grid is a centred square.
 fn panel_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> [u8; 3] {
     const N: u32 = 18;
-    if u < PANEL_LEFT || u > PANEL_LEFT + PANEL_SIDE {
-        return PANEL_BG; // the screen margin beside the square
+    if u < PANEL_LEFT
+        || u >= PANEL_LEFT + PANEL_SIDE
+        || v < PANEL_TOP
+        || v >= PANEL_TOP + PANEL_SIDE
+    {
+        return PANEL_BG; // the tile margin around the grid
     }
     let pitch = PANEL_SIDE / N as f32;
     let col = (((u - PANEL_LEFT) / pitch) as u32).min(N - 1);
@@ -224,42 +207,66 @@ mod tests {
     }
 
     #[test]
-    fn the_states_differ_only_on_the_screen() {
+    fn the_states_share_one_outline() {
         let (on, off) = (rgba(32, true), rgba(32, false));
         assert_ne!(on, off);
-        // The outline (alpha) is the same monitor in both states.
+        // The tile's outline (alpha) is the same in both states.
         let alpha = |p: &[u8]| p.chunks(4).map(|c| c[3]).collect::<Vec<_>>();
         assert_eq!(alpha(&on), alpha(&off));
     }
 
     #[test]
-    fn the_states_differ_only_inside_the_screen_area() {
-        // The bezel, neck and base paint identically in both states; only the
-        // screen's contents may differ. (A pixel whose centre is a full pixel
-        // outside the screen's box has no supersample inside it.)
-        const S: u32 = 64;
-        const M: f32 = 1.0 / S as f32;
+    fn the_states_differ_only_in_the_padlock_colour() {
+        // Panel background and off-dots paint identically in both states;
+        // every differing pixel is a lit padlock dot (orange vs white).
+        const S: u32 = 256;
         let (on, off) = (rgba(S, true), rgba(S, false));
-        for y in 0..S {
-            for x in 0..S {
-                let u = (x as f32 + 0.5) / S as f32;
-                let v = (y as f32 + 0.5) / S as f32;
-                if !(u > 0.10 - M && u < 0.90 + M && v > 0.15 - M && v < 0.63 + M) {
-                    let i = ((y * S + x) * 4) as usize;
-                    assert_eq!(
-                        &on[i..i + 4],
-                        &off[i..i + 4],
-                        "pixel ({x},{y}) outside the screen area differs between states"
-                    );
-                }
+        let mut differing = 0;
+        for i in (0..on.len()).step_by(4) {
+            if on[i..i + 4] != off[i..i + 4] {
+                differing += 1;
+                // Dot edges blend with the tile, so compare channels: orange
+                // is redder and less blue than white at the same coverage.
+                assert!(on[i] > off[i], "engaged padlock is orange, released white");
+                assert!(
+                    on[i + 2] < off[i + 2],
+                    "engaged padlock is orange, released white"
+                );
             }
+        }
+        assert!(differing > 0);
+    }
+
+    #[test]
+    fn the_icon_is_the_dot_panel_tile_with_no_monitor() {
+        // The dot panel fills the whole icon: a dark tile with rounded
+        // corners (transparent outside), no bezel, neck or base.
+        const S: u32 = 256;
+        let img = rgba(S, true);
+        let at = |u: f32, v: f32| {
+            let i = (((v * S as f32) as u32 * S + (u * S as f32) as u32) * 4) as usize;
+            [img[i], img[i + 1], img[i + 2], img[i + 3]]
+        };
+        assert_eq!(at(0.0, 0.0)[3], 0, "rounded corner is transparent");
+        assert_eq!(at(0.995, 0.995)[3], 0, "rounded corner is transparent");
+        // Where the old monitor had bezel, neck, base and the gap beside them.
+        assert_eq!(at(0.03, 0.5), [14, 15, 19, 255], "tile margin, not bezel");
+        assert_eq!(at(0.5, 0.995 - 0.01), [14, 15, 19, 255], "tile, not base");
+        assert_eq!(at(0.1, 0.95), [14, 15, 19, 255], "tile, not transparent");
+        // No slate silhouette: the old bezel and neck leaned blue; tile,
+        // off-dots and the orange padlock (and their blends) never do.
+        for p in img.chunks(4).filter(|p| p[3] > 0) {
+            assert!(
+                u16::from(p[2]) <= u16::from(p[0]) + 8,
+                "bluish pixel {:?} is a leftover bezel",
+                &p[..3]
+            );
         }
     }
 
     #[test]
-    fn the_screen_is_the_18x18_dot_panel() {
-        // The panel is a centred square, side = the screen's height: u from
-        // 0.26 to 0.74, v from 0.15 to 0.63, 18×18 cells.
+    fn the_icon_is_the_18x18_dot_panel() {
+        // The panel is a centred square filling the tile, 18×18 cells.
         const S: u32 = 256;
         const N: u32 = 18;
         let pitch = PANEL_SIDE / N as f32;
@@ -297,9 +304,9 @@ mod tests {
         // The keyhole is cut out of the padlock: off, not lit.
         let (u, v) = centre(11, 8);
         assert_eq!(px(u, v, &engaged), [38, 40, 46], "keyhole is cut out");
-        // The panel background: the screen margin beside the square, and the
-        // gap between two dots.
-        assert_eq!(px(0.15, 0.39, &engaged), [14, 15, 19], "screen margin");
+        // The panel background: the tile margin around the grid, and the gap
+        // between two dots.
+        assert_eq!(px(0.02, 0.5, &engaged), [14, 15, 19], "tile margin");
         let (u, v) = (PANEL_LEFT + pitch, PANEL_TOP + 0.5 * pitch);
         assert_eq!(px(u, v, &engaged), [14, 15, 19], "gap between dots");
     }

@@ -44,8 +44,9 @@ near-black panel:
   native title bar). The top 17 grid rows are a dot title strip: the heading
   plus a minimise and a close control, both drawn as dot frames; dragging the
   strip moves the window. There is no maximise (the window is not resizable).
-- **Icons**: the same language at icon scale — the monitor's screen becomes
-  an 18×18 dot panel showing the padlock (orange engaged, white released);
+- **Icons**: the same language at icon scale — the icon is the 18×18 dot
+  panel alone, a dark rounded tile with the padlock (orange engaged, white
+  released) and no monitor silhouette (#16);
   one pure source for tray, title bar, taskbar and exe (regenerated .ico
   enforced by test).
 
