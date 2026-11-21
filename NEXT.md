@@ -3,12 +3,12 @@ Updated: 2026-11-22 · v0.2.0 (dot-matrix redesign, spec #8, tickets #9-#18) han
 
 ## Next step
 1. Nothing pending. v0.2.0 is released (CI + Release green, exe + sha256 published), issues #8-#18 closed, worktrees and ticket branches removed. Work now happens on master directly.
-2. Optional follow-ups: window height cap for 7 DETAILS lines (715 pt); pin-mode Alt+Tab release check.
+2. Optional follow-ups: window height cap for 7 DETAILS lines (715 pt).
 
 ## State now
 - master = dot-matrix tip + version bump 0.1.3 -> 0.2.0 (Cargo.toml/lock), tag v0.2.0. fmt/clippy clean, `cargo test` 115/115 before the bump.
 - User hand-check: "it was good!" (wave rules, 3 icon states, frameless window, DETAILS spacing).
-- Carried, UNVERIFIED: pin-mode Alt+Tab release on this Win11 build (if it holds the lock, add the foreground class to is_shell_ui_class in src/win32.rs). Not implemented: window height cap for 7 DETAILS lines (715 pt). Hovering the window can disturb the clip: close to tray for in-game use.
+- Pin-mode Alt+Tab releases the lock on the user's Win11 build (user-confirmed 2026-11-22, no fix needed). Not implemented: window height cap for 7 DETAILS lines (715 pt). Hovering the window can disturb the clip: close to tray for in-game use.
 
 ## Don't retry
 - Image generation: OpenCode credential missing; use docs/design/dot-matrix/tools/render_v2.py.
