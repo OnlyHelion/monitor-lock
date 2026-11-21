@@ -407,8 +407,8 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
     const BUTTON_W: u32 = 27; // 6n+3 for the 4-char labels: inner 6n−1 + 2-cell margins
     const BUTTON_H: u32 = 11;
     const DETAILS: (u32, u32, u32, u32) = (8, 68, 41, 7); // col, row, w, h
-    const DETAIL_ORIGIN: Cell = (8, 76);
-    const DETAIL_STEP: u32 = 6;
+    const DETAIL_ORIGIN: Cell = (8, 78); // 2 blank rows under the DETAILS label
+    const DETAIL_STEP: u32 = 9; // TEXT_ROWS + 2 blank dot-rows, like the status rows
     const TEXT_ROWS: u32 = 7; // the 5×7 font's row height
 
     let n = content.detail_rows.len() as u32;
@@ -1243,8 +1243,8 @@ mod tests {
         );
         assert_eq!(placed.details.row, 68);
         assert_eq!(placed.details.col, 8);
-        assert_eq!(placed.detail_origin, (8, 76));
-        assert_eq!(placed.detail_step, 6);
+        assert_eq!(placed.detail_origin, (8, 78));
+        assert_eq!(placed.detail_step, 9);
         // The closed window is the 128×80 grid (640×400 at pitch 5).
         assert_eq!((map.cols(), map.rows()), (128, 80));
         // Heading 'M' at (8,7): row 0 "10001" lights cols 8 and 12, white.
@@ -1277,13 +1277,57 @@ mod tests {
     #[test]
     fn layout_places_the_detail_rows() {
         let (map, placed) = layout(&engaged_panel(vec!["FG: GAME", "REASSERTS: 3"]));
-        // Detail rows from (8,76) stepping 6.
-        assert_eq!(placed.detail_origin, (8, 76));
-        assert_eq!(placed.detail_step, 6);
-        assert_eq!(map.get(8, 76), SOFT, "first detail row 'F'");
-        assert_eq!(map.get(8, 82), SOFT, "second detail row 'R'");
-        // The grid grows to fit the detail rows.
-        assert!(map.rows() > 80, "detail rows grow the grid");
+        // Detail rows from (8,78) stepping 9 (7 glyph rows + 2 blank).
+        assert_eq!(placed.detail_origin, (8, 78));
+        assert_eq!(placed.detail_step, 9);
+        assert_eq!(map.get(8, 78), SOFT, "first detail row 'F'");
+        assert_eq!(map.get(8, 87), SOFT, "second detail row 'R'");
+        assert_eq!(map.get(8, 85), OFF, "blank dot-row between the lines");
+        assert_eq!(map.get(8, 86), OFF, "blank dot-row between the lines");
+        // The grid grows to fit the detail rows: last row ends at 87+7,
+        // plus the 4-row bottom margin.
+        assert_eq!(map.rows(), 87 + 7 + 4);
+    }
+
+    #[test]
+    fn layout_grown_height_follows_the_detail_count() {
+        let rows = |n: usize| layout(&engaged_panel(vec!["FG: A"; n])).0.rows();
+        assert_eq!(rows(0), 80, "closed grid unchanged");
+        assert_eq!(rows(1), 78 + 7 + 4);
+        assert_eq!(rows(7), 78 + 6 * 9 + 7 + 4); // 143 rows = 715 pt
+    }
+
+    #[test]
+    fn layout_detail_lines_never_overlap_and_are_not_clipped() {
+        // Longest realistic rows: 20 widest glyphs each, 7 lines.
+        let long = "W".repeat(40);
+        let rows: Vec<String> = (0..7).map(|_| long.clone()).collect();
+        let snap_rows: Vec<String> = rows.iter().map(|r| fit_width(r, 120)).collect();
+        let panel = Panel {
+            padlock: Padlock::Solid,
+            padlock_color: ORANGE,
+            status: ["A".into(), "B".into(), "C".into()],
+            detail_rows: snap_rows,
+        };
+        let (map, placed) = layout(&panel);
+        // At least one blank dot-row between consecutive lines.
+        assert!(placed.detail_step > 7, "lines need a blank row between");
+        // Every line's last glyph column and last glyph row are inside the
+        // grid (640 pt wide = 128 cols; no clipping at right or bottom).
+        assert_eq!(map.cols(), 128);
+        let last_col = placed.detail_origin.0 + 6 * 19 + 4;
+        assert!(last_col < map.cols(), "longest row clipped at the right");
+        let last_row = placed.detail_origin.1 + 6 * placed.detail_step + 6;
+        assert!(last_row < map.rows(), "last row clipped at the bottom");
+        // The rightmost cell of the longest row's last glyph is lit.
+        assert_ne!(map.get(last_col, placed.detail_origin.1 + 6), OFF);
+        // Between lines, the gap rows stay dark.
+        for i in 0..6 {
+            let gap = placed.detail_origin.1 + i * placed.detail_step + 7;
+            for c in 8..128 {
+                assert_eq!(map.get(c, gap), OFF, "gap row {gap} col {c}");
+            }
+        }
     }
 
     #[test]
