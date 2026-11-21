@@ -45,8 +45,8 @@ near-black panel:
   plus a minimise and a close control, both drawn as dot frames; dragging the
   strip moves the window. There is no maximise (the window is not resizable).
 - **Icons**: the same language at icon scale — the icon is the 18×18 dot
-  panel alone, a dark rounded tile with the padlock (orange engaged, white
-  released) and no monitor silhouette (#16);
+  panel alone, a dark rounded tile with the padlock (solid orange engaged, solid white
+  released, hollow orange suspended) and no monitor silhouette (#16);
   one pure source for tray, title bar, taskbar and exe (regenerated .ico
   enforced by test).
 

@@ -376,22 +376,22 @@ fn set_main_window_visible(visible: bool) {
 /// bar) and the big one (taskbar, Alt+Tab). eframe's `ViewportCommand::Icon`
 /// cannot do this: winit's `set_window_icon` sets only the small icon, so the
 /// taskbar kept the startup icon (user report, v0.1.2).
-pub fn set_main_window_icon(engaged: bool) {
+pub fn set_main_window_icon(art: crate::icon::Art) {
     // One (small, big) HICON pair per state, created once and kept for the
     // process's lifetime. Stored as isize: HICON is not Send/Sync.
-    static ICONS: OnceLock<[(isize, isize); 2]> = OnceLock::new();
+    static ICONS: OnceLock<[(isize, isize); 3]> = OnceLock::new();
     let icons = ICONS.get_or_init(|| {
-        let pair = |engaged: bool| {
+        let pair = |art: crate::icon::Art| {
             let small = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16) as u32;
             let big = unsafe { GetSystemMetrics(SM_CXICON) }.max(32) as u32;
             (
-                create_icon(small, engaged).map_or(0, |h| h.0 as isize),
-                create_icon(big, engaged).map_or(0, |h| h.0 as isize),
+                create_icon(small, art).map_or(0, |h| h.0 as isize),
+                create_icon(big, art).map_or(0, |h| h.0 as isize),
             )
         };
-        [pair(false), pair(true)]
+        crate::icon::Art::ALL.map(pair)
     });
-    let (small, big) = icons[usize::from(engaged)];
+    let (small, big) = icons[art.index()];
     let Some(hwnd) = find_main_window() else {
         return;
     };
@@ -411,8 +411,8 @@ pub fn set_main_window_icon(engaged: bool) {
 
 /// An HICON of the app icon (`icon::rgba`) at `size` x `size`: 32bpp BGRA
 /// color with alpha, plus an all-zero AND mask (alpha does the masking).
-fn create_icon(size: u32, engaged: bool) -> Option<HICON> {
-    let mut bgra = crate::icon::rgba(size, engaged);
+fn create_icon(size: u32, art: crate::icon::Art) -> Option<HICON> {
+    let mut bgra = crate::icon::rgba(size, art);
     for px in bgra.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
@@ -600,12 +600,12 @@ mod tests {
     /// The window icon swap (taskbar + title bar) needs real HICONs; a bad
     /// buffer or mask size makes CreateIcon fail and the swap silently skips.
     #[test]
-    fn real_system_creates_window_icons_for_both_states() {
+    fn real_system_creates_window_icons_for_every_art() {
         for size in [16, 32, 48] {
-            for engaged in [false, true] {
+            for art in crate::icon::Art::ALL {
                 assert!(
-                    super::create_icon(size, engaged).is_some(),
-                    "CreateIcon failed at {size}px (engaged: {engaged})"
+                    super::create_icon(size, art).is_some(),
+                    "CreateIcon failed at {size}px ({art:?})"
                 );
             }
         }
