@@ -1,10 +1,9 @@
 # NEXT — Monitor Lock
-Updated: 2026-11-22 · v0.2.0 (dot-matrix redesign, spec #8, tickets #9-#18) hand-checked OK by the user, merged to master, tagged, pushed
+Updated: 2026-11-22 · v0.2.0 (dot-matrix redesign, spec #8, tickets #9-#18) hand-checked OK by the user, released (CI + Release workflows green)
 
 ## Next step
-1. Watch the first GitHub CI run + the release workflow for tag v0.2.0 (`gh run list`). UNVERIFIED: ci.yml and release.yml have not run on GitHub for this version. If the release asset is missing/broken, fix on master and retag (or v0.2.1).
-2. After CI is green: close issues #8-#18 (`gh issue close`), remove old worktrees K:\wt\monitor-lock-9|10|11|12|review and their ticket branches + `dot-matrix` branch.
-3. No PR (direct master commits + v* tag).
+1. Nothing pending. v0.2.0 is released (CI + Release green, exe + sha256 published), issues #8-#18 closed, worktrees and ticket branches removed. Work now happens on master directly.
+2. Optional follow-ups: window height cap for 7 DETAILS lines (715 pt); pin-mode Alt+Tab release check.
 
 ## State now
 - master = dot-matrix tip + version bump 0.1.3 -> 0.2.0 (Cargo.toml/lock), tag v0.2.0. fmt/clippy clean, `cargo test` 115/115 before the bump.
