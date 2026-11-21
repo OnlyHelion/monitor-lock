@@ -101,6 +101,36 @@ pub struct Placed {
     /// Top-left cell of the first detail row, and the step between rows.
     pub detail_origin: Cell,
     pub detail_step: u32,
+    /// The dot title strip (top rows, full width): dragging it moves the
+    /// frameless window. Fixed at the top, so it ignores the DETAILS growth.
+    pub title_strip: ButtonRect,
+    /// The minimise (`_`) control, inside the strip.
+    pub minimise: ButtonRect,
+    /// The close (`X`) control, inside the strip (close goes to the tray).
+    pub close: ButtonRect,
+}
+
+/// What a pointer cell in the title strip means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleHit {
+    Minimise,
+    Close,
+    /// The strip itself: pressing it starts a window drag.
+    Drag,
+}
+
+/// The title strip's meaning for a cell: a control, the drag area, or None
+/// outside the strip. Controls win over the strip they sit in.
+pub fn title_hit(cell: Cell, placed: &Placed) -> Option<TitleHit> {
+    if cell_in_rect(cell, &placed.close) {
+        Some(TitleHit::Close)
+    } else if cell_in_rect(cell, &placed.minimise) {
+        Some(TitleHit::Minimise)
+    } else if cell_in_rect(cell, &placed.title_strip) {
+        Some(TitleHit::Drag)
+    } else {
+        None
+    }
 }
 
 /// The lit cells of `ch` in the 5×7 dot font, as (col, row) within the cell.
@@ -410,6 +440,14 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
     const DETAIL_ORIGIN: Cell = (8, 78); // 2 blank rows under the DETAILS label
     const DETAIL_STEP: u32 = 9; // TEXT_ROWS + 2 blank dot-rows, like the status rows
     const TEXT_ROWS: u32 = 7; // the 5×7 font's row height
+    // The frameless title strip: the rows above the first separator. The
+    // controls are 11×11 frames centred on the heading text (rows 7..14),
+    // the close at the heading's 8-cell margin from the right edge.
+    const STRIP_H: u32 = SEP_ROWS[0];
+    const CTRL_SIZE: u32 = 11;
+    const CTRL_ROW: u32 = 5;
+    const CLOSE_COL: u32 = PANEL_COLS - 8 - CTRL_SIZE;
+    const MINIMISE_COL: u32 = CLOSE_COL - 3 - CTRL_SIZE;
 
     let n = content.detail_rows.len() as u32;
     // The closed panel is the 128×80 grid (640×400 at pitch 5); detail rows
@@ -444,6 +482,12 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
         map.frame(bx, BUTTON_ROW, BUTTON_W, BUTTON_H, GREY);
         map.stamp_text(label, bx + 2, BUTTON_ROW + 2, WHITE);
     }
+    for col in [MINIMISE_COL, CLOSE_COL] {
+        map.frame(col, CTRL_ROW, CTRL_SIZE, CTRL_SIZE, GREY);
+    }
+    // Minimise: a 5-wide bar on the glyph's bottom row; close: the X glyph.
+    map.hline(CTRL_ROW + 8, MINIMISE_COL + 3, MINIMISE_COL + 7, WHITE);
+    map.stamp_text("X", CLOSE_COL + 3, CTRL_ROW + 2, WHITE);
     map.stamp_text("DETAILS", DETAILS.0, DETAILS.1, SOFT);
     for (i, row) in content.detail_rows.iter().enumerate() {
         map.stamp_text(
@@ -487,6 +531,24 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
         },
         detail_origin: DETAIL_ORIGIN,
         detail_step: DETAIL_STEP,
+        title_strip: ButtonRect {
+            col: 0,
+            row: 0,
+            w: PANEL_COLS,
+            h: STRIP_H,
+        },
+        minimise: ButtonRect {
+            col: MINIMISE_COL,
+            row: CTRL_ROW,
+            w: CTRL_SIZE,
+            h: CTRL_SIZE,
+        },
+        close: ButtonRect {
+            col: CLOSE_COL,
+            row: CTRL_ROW,
+            w: CTRL_SIZE,
+            h: CTRL_SIZE,
+        },
     };
     (map, placed)
 }
@@ -1288,6 +1350,66 @@ mod tests {
         assert_eq!(map.get(10, 54), WHITE);
         // DETAILS 'D' at (8,68): row 0 "11100" lights col 8, soft.
         assert_eq!(map.get(8, 68), SOFT);
+    }
+
+    #[test]
+    fn layout_places_the_title_strip_and_its_controls() {
+        let (map, placed) = layout(&engaged_panel(vec![]));
+        let rect = |col, row, w, h| ButtonRect { col, row, w, h };
+        // The strip is the top 17 rows (above the first separator), full width.
+        assert_eq!(placed.title_strip, rect(0, 0, 128, 17));
+        // Close: 11x11, right margin 8 like the heading's left margin;
+        // minimise 3 cells to its left; both centred on the heading text.
+        assert_eq!(placed.close, rect(109, 5, 11, 11));
+        assert_eq!(placed.minimise, rect(95, 5, 11, 11));
+        // Frames are grey like the other buttons.
+        assert_eq!(map.get(109, 5), GREY);
+        assert_eq!(map.get(119, 15), GREY);
+        assert_eq!(map.get(95, 5), GREY);
+        // The X glyph at (112,7): row 0 "10001" lights cols 112 and 116.
+        assert_eq!(map.get(112, 7), WHITE);
+        assert_eq!(map.get(116, 7), WHITE);
+        assert_eq!(map.get(114, 7), OFF);
+        // The minimise bar: 5 wide on the glyph's bottom row (13).
+        for c in 98..=102 {
+            assert_eq!(map.get(c, 13), WHITE, "bar col {c}");
+        }
+        assert_eq!(map.get(98, 7), OFF);
+        assert_eq!(map.get(97, 13), OFF);
+        assert_eq!(map.get(103, 13), OFF);
+    }
+
+    #[test]
+    fn title_strip_does_not_move_when_the_window_grows() {
+        let (_, closed) = layout(&engaged_panel(vec![]));
+        let (map, open) = layout(&engaged_panel(vec!["FG: A"; 7]));
+        assert!(map.rows() > 80);
+        assert_eq!(open.title_strip, closed.title_strip);
+        assert_eq!(open.minimise, closed.minimise);
+        assert_eq!(open.close, closed.close);
+        assert_eq!(open.title_strip.w, map.cols(), "strip spans the grown grid");
+    }
+
+    #[test]
+    fn title_hit_tells_controls_from_the_drag_strip() {
+        let (_, placed) = layout(&engaged_panel(vec![]));
+        let hit = |c, r| title_hit((c, r), &placed);
+        assert_eq!(hit(109, 5), Some(TitleHit::Close));
+        assert_eq!(hit(119, 15), Some(TitleHit::Close));
+        assert_eq!(hit(95, 5), Some(TitleHit::Minimise));
+        assert_eq!(hit(105, 15), Some(TitleHit::Minimise));
+        // Gap between the controls, the heading and the strip edges drag.
+        assert_eq!(hit(106, 10), Some(TitleHit::Drag));
+        assert_eq!(hit(94, 10), Some(TitleHit::Drag));
+        assert_eq!(hit(120, 10), Some(TitleHit::Drag));
+        assert_eq!(hit(10, 9), Some(TitleHit::Drag));
+        assert_eq!(hit(0, 0), Some(TitleHit::Drag));
+        assert_eq!(hit(127, 16), Some(TitleHit::Drag));
+        assert_eq!(hit(109, 4), Some(TitleHit::Drag), "just above the close");
+        // The separator row and everything below are not the strip.
+        assert_eq!(hit(50, 17), None);
+        assert_eq!(hit(50, 30), None);
+        assert_eq!(hit(109, 17), None);
     }
 
     #[test]

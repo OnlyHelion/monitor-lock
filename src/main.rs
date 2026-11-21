@@ -171,6 +171,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // texture and the dots would stop being round).
             .with_inner_size([640.0, 400.0])
             .with_resizable(false)
+            // Frameless: the dot title strip draws the title, minimise and
+            // close, and drags the window (ticket #15).
+            .with_decorations(false)
             // The tray starts released, so the window does too.
             .with_icon(app::window_icon(false)),
         ..Default::default()

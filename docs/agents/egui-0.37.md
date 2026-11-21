@@ -16,5 +16,7 @@ The window is one texture (ADR 0001): `src/app.rs` renders the dot panel to RGBA
 | Cursor | `ctx.set_cursor_icon(egui::CursorIcon::PointingHand)` / `egui::CursorIcon::Default`. `Arrow` does not exist. |
 | Resize | `ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)))` |
 | Close to tray | `ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose)` |
-| Window setup (`main.rs`) | `ViewportBuilder::default().with_inner_size([640.0, 400.0]).with_resizable(false)` |
+| Window setup (`main.rs`) | `ViewportBuilder::default().with_inner_size([640.0, 400.0]).with_resizable(false).with_decorations(false)` (frameless, #15) |
 | Taskbar / title icon | `win32::set_main_window_icon`, not `ViewportCommand::Icon` (that one doesn't reach the taskbar). |
+| Drag frameless window | `ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag)` on `i.pointer.primary_pressed()` (unverified on screen) |
+| Minimise | `ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))` |

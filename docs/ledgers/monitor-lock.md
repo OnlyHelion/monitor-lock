@@ -18,6 +18,7 @@
 - 2026-11-22 #14 DONE (branch ticket/14-wave-dots): wave dots now discrete via `dotmatrix::wave_level(d,t)` (0..=3 rounding of wave_intensity) + `wave_level_blend`; app.rs blends by level only. Timing/one-shot/static frames unchanged. User: eyeball each state change.
 
 - 2026-11-22 #13 DETAILS spacing (branch ticket/13-details-spacing): DETAIL_STEP 6->9 (7 glyph rows + 2 blank), DETAIL_ORIGIN (8,76)->(8,78); grown grid = 78+9(n-1)+7+4 rows (n=7: 143 rows = 715 pt); layout tests pin it. Needs user eyeball with 1 and 2+ monitors.
+- 2026-11-22 #15 frameless window (branch ticket/15-frameless): with_decorations(false); dotmatrix title_strip rows 0..17 + minimise (95,5) / close (109,5) 11x11, pure title_hit; StartDrag, Minimized, close=hide to tray. Needs user eyeball at 100/125/150 % DPI.
 
 ## Archive
 - 2026-11-12 #5 hand-check loop (user reports, diagnoses, pipeline history) moved unchanged: `docs/ledgers/archive/monitor-lock-handcheck-loop-2026-11-12.md`.
