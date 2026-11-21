@@ -564,6 +564,22 @@ pub fn wave_intensity(d: f32, t: f32) -> f32 {
     (-g * g / (2.0 * 13.0 * 13.0)).exp() * (1.0 - t) * falloff
 }
 
+/// The wave's top intensity level; a dot is at one of 0..=WAVE_LEVELS.
+pub const WAVE_LEVELS: u8 = 3;
+
+/// The discrete level (0..=WAVE_LEVELS) a dot at distance `d` takes at
+/// progress `t`: `wave_intensity` rounded to the nearest whole level, so the
+/// ring reads as dots stepping up and down, not a smooth gradient.
+pub fn wave_level(d: f32, t: f32) -> u8 {
+    let i = wave_intensity(d, t).clamp(0.0, 1.0);
+    (i * WAVE_LEVELS as f32).round() as u8
+}
+
+/// The blend fraction toward the wave colour for a level: level / WAVE_LEVELS.
+pub fn wave_level_blend(level: u8) -> f32 {
+    level.min(WAVE_LEVELS) as f32 / WAVE_LEVELS as f32
+}
+
 /// The picker ring's total arc length: a rounded rectangle inset 24 px from
 /// `bounds`, corner radius 24 px.
 pub fn ring_length(bounds: &crate::seam::Rect) -> f32 {
@@ -1473,6 +1489,43 @@ mod tests {
             let i = wave_intensity(d, t);
             assert!((0.0..=1.0 + 1e-6).contains(&i), "d={d}: {i} out of [0,1]");
         }
+    }
+
+    #[test]
+    fn wave_level_is_a_discrete_step_of_the_intensity() {
+        // Start frame: the padlock centre is at the top level.
+        assert_eq!(wave_level(0.0, 0.0), WAVE_LEVELS);
+        // End frame: every dot is back to level 0, near or far.
+        for d in [0.0, 30.0, 70.0, 139.0, 300.0] {
+            assert_eq!(wave_level(d, 1.0), 0, "t=1 d={d}");
+        }
+        // Beyond the front's reach: 0.
+        assert_eq!(wave_level(141.0, 0.5), 0);
+        // Only whole levels 0..=WAVE_LEVELS ever come out, and every one of
+        // the intermediate levels does occur somewhere in the one-shot.
+        let mut seen = [false; WAVE_LEVELS as usize + 1];
+        for ti in 0..=100 {
+            for di in 0..=300 {
+                let l = wave_level(di as f32, ti as f32 / 100.0);
+                assert!(l <= WAVE_LEVELS, "level {l} out of range");
+                seen[l as usize] = true;
+            }
+        }
+        assert!(seen.iter().all(|&s| s), "every level occurs: {seen:?}");
+        // The ring: at t=0.5 a dot on the front is brighter than one inside
+        // or well ahead of it.
+        let on_front = wave_level(70.0, 0.5);
+        assert!(on_front > wave_level(5.0, 0.5));
+        assert!(on_front > wave_level(130.0, 0.5));
+    }
+
+    #[test]
+    fn wave_level_blend_has_one_value_per_level() {
+        assert_eq!(wave_level_blend(0), 0.0);
+        assert_eq!(wave_level_blend(WAVE_LEVELS), 1.0);
+        let a = wave_level_blend(1);
+        let b = wave_level_blend(2);
+        assert!(0.0 < a && a < b && b < 1.0);
     }
 
     fn ring_bounds() -> Rect {

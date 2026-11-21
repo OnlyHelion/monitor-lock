@@ -55,5 +55,5 @@ The suspended state of the padlock glyph: the outline only, in the same orange a
 _Avoid_: outline mode, ghost, disabled
 
 **Wave**:
-The one-shot (≤300 ms) state-change animation: a small localized orange gradient ring radiating from the padlock across the Dot-matrix panel, then static.
+The one-shot (≤300 ms) state-change animation: a ring radiating from the padlock across the Dot-matrix panel in which each dot steps through a few discrete orange levels (no smooth gradient), then static.
 _Avoid_: sweep, ripple, transition
