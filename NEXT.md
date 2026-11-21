@@ -1,10 +1,10 @@
 # NEXT — Monitor Lock
-Updated: 2026-11-20 10:4x · User hand-check 10:44: "looks good but there are some issues" - user will open a NEW session for the issues; tickets stay OPEN
+Updated: 2026-11-22 (tickets #13-#15 created from hand-check; ledger has the quote) - was 2026-11-20 10:4x · User hand-check 10:44: "looks good but there are some issues" - user will open a NEW session for the issues; tickets stay OPEN
 
 ## Next step
-1. User's new session: the hand-check issues are reported there. FIRST append them to the ledger quoted (with time), then fix in a worktree from the dot-matrix tip (own target dir, see docs/agents/parallel-work.md), merge --no-ff back, re-run fmt/clippy/test (same as CI), re-ask the user to hand-check the changed areas.
-2. After user's FULL confirmation: merge `dot-matrix` → master (fast-forward), bump version (0.1.3 → 0.2.0, design-language release), tag v* per prior releases, push. Watch the first CI run (new ci.yml, UNVERIFIED on GitHub). Then `git worktree remove` K:\wt\monitor-lock-9|10|11|12 + K:\wt\monitor-lock-review and delete the ticket branches.
-3. No PR (repo closes by direct master commits + v* tag).
+1. Hand-check issues are now TICKETS (children of #8, label ready-for-agent): #13 DETAILS spacing (lines 6 rows apart vs 7-row glyphs -> overlap; also clipping), #14 wave as discrete dots on the grid (not gradient), #15 frameless whole-window dot matrix with dot `_` and `X` (no maximise; blocked by #13). #13 and #14 independent. Implement each in a worktree from the dot-matrix tip (own target dir, docs/agents/parallel-work.md), merge --no-ff, fmt/clippy/test, re-ask user to hand-check.
+2. After user's FULL confirmation: merge `dot-matrix` -> master (ff), bump 0.1.3 -> 0.2.0, tag v*, push, watch first CI run (ci.yml UNVERIFIED on GitHub). Then remove worktrees K:\wt\monitor-lock-9|10|11|12|review + ticket branches.
+3. No PR (direct master commits + v* tag).
 
 ## Hand-check checklist (pre-checks OK; user impression "looks good" but some issues, not yet enumerated)
 - WINDOW (#11, 10-point list in ledger #11 entry): 640×400 non-resizable, title "Monitor Lock", off-dots across panel; ENGAGED solid orange padlock + "LOCK: ENGAGED"/fg title/"TARGET: <id>" all orange; RELEASED solid white + "LOCK: RELEASED"/"CURSOR FREE" or fg title; SUSPENDED (pinned, released) HOLLOW orange + "LOCK: SUSPENDED"; PICKING solid white + "PICKING MONITOR / CLICK TO PIN / ESC TO CANCEL", PICK dimmed+dead, AUTO/EXIT live; WAVE one-shot ~250 ms from padlock on every state change and NOT on first show (review fix F7); DETAILS click grows with FG/GAME/MONITORS/per-monitor/CLIP REASSERTS rows, click again shrinks; PICK/AUTO/EXIT work + pointing hand over enabled buttons; dots round/crisp at 100/125/150 % DPI; tray menu, icon swap, close-to-tray, clip re-assert unchanged.
