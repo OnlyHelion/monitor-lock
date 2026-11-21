@@ -154,7 +154,8 @@ impl eframe::App for MonitorLockApp {
             );
         }
 
-        // The wave: blend dots toward ORANGE by wave_intensity(d, t). The
+        // The wave: each dot steps to a discrete level (wave_level(d, t)),
+        // blended toward ORANGE by that level only. The
         // formula's distances are 1x-pitch px, so 5 px per cell; the padlock
         // centre is (8+9, 21+9) in cell units.
         if let Some(t) = wave_t {
@@ -165,12 +166,16 @@ impl eframe::App for MonitorLockApp {
                     let dx = (c as f32 + 0.5) - pc;
                     let dy = (r as f32 + 0.5) - pr;
                     let d = (dx * dx + dy * dy).sqrt() * 5.0;
-                    let i = dotmatrix::wave_intensity(d, t);
-                    if i > 0.0 {
+                    let level = dotmatrix::wave_level(d, t);
+                    if level > 0 {
                         map.set(
                             c,
                             r,
-                            dotmatrix::blend_toward(map.get(c, r), dotmatrix::ORANGE, i),
+                            dotmatrix::blend_toward(
+                                map.get(c, r),
+                                dotmatrix::ORANGE,
+                                dotmatrix::wave_level_blend(level),
+                            ),
                         );
                     }
                 }
