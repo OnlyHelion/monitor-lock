@@ -1,7 +1,7 @@
 //! Thin-layer UI: the tray icon and the on-demand egui window. No unit tests
 //! (spec: the thin layer is verified by the user's in-game hand-check). The
 //! window's content is one dot-matrix panel texture (the `dotmatrix` module):
-//! no native widgets are drawn for it; the buttons are hit-tested by hand.
+//! no native widgets or window frame; the buttons and title strip are hit-tested by hand.
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -217,7 +217,7 @@ impl eframe::App for MonitorLockApp {
             // Hit-testing: the texture is stretched to exactly the panel, so
             // the pointer's cell is its panel point divided by the cell
             // pitch in points.
-            let (hit, clicked) = ctx.input(|i| {
+            let (hit, clicked, pressed) = ctx.input(|i| {
                 (
                     i.pointer.interact_pos().and_then(|p| {
                         let local = p - rect.min;
@@ -231,6 +231,7 @@ impl eframe::App for MonitorLockApp {
                         )
                     }),
                     i.pointer.primary_clicked(),
+                    i.pointer.primary_pressed(),
                 )
             });
             let in_ = |b: &dotmatrix::ButtonRect| {
@@ -240,9 +241,20 @@ impl eframe::App for MonitorLockApp {
             let over_auto = in_(&placed.buttons[1]);
             let over_exit = in_(&placed.buttons[2]);
             let over_details = in_(&placed.details);
+            // The frameless title strip: minimise / close controls and the
+            // drag area (the native frame is gone).
+            let title = hit.and_then(|cell| dotmatrix::title_hit(cell, &placed));
+            if pressed && title == Some(dotmatrix::TitleHit::Drag) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
 
             if clicked {
-                if over_pick {
+                if title == Some(dotmatrix::TitleHit::Minimise) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                } else if title == Some(dotmatrix::TitleHit::Close) {
+                    // Close goes to the tray, like the old native X.
+                    win32::hide_main_window();
+                } else if over_pick {
                     let _ = self.cmd_tx.send(UiCommand::StartPicker);
                 } else if over_auto {
                     let _ = self.cmd_tx.send(UiCommand::BackToAuto);
@@ -253,7 +265,11 @@ impl eframe::App for MonitorLockApp {
                 }
             }
 
-            let hand = over_pick || over_auto || over_exit || over_details;
+            let over_control = matches!(
+                title,
+                Some(dotmatrix::TitleHit::Minimise | dotmatrix::TitleHit::Close)
+            );
+            let hand = over_pick || over_auto || over_exit || over_details || over_control;
             if hand != self.cursor_hand {
                 self.cursor_hand = hand;
                 ctx.set_cursor_icon(if hand {
