@@ -36,9 +36,14 @@ near-black panel:
   rows between the three status rows; buttons share the left edge with the
   heading and DETAILS).
 - **Motion**: the UI is static. A Lock state change plays one one-shot
-  ≤300 ms transition: a small localized orange gradient wave radiating from
-  the padlock, then static. The only continuous animation is the picker
+  ≤300 ms transition: a small localized orange wave radiating from the
+  padlock, each dot stepping through a few discrete intensity levels (no
+  smooth gradient; amended 2026-11-22, #14), then static. The only continuous animation is the picker
   ring: a dotted orange ring with two chasers orbiting on opposite sides.
+- **Window chrome** (amended 2026-11-22, #15): the window is frameless (no
+  native title bar). The top 17 grid rows are a dot title strip: the heading
+  plus a minimise and a close control, both drawn as dot frames; dragging the
+  strip moves the window. There is no maximise (the window is not resizable).
 - **Icons**: the same language at icon scale — the monitor's screen becomes
   an 18×18 dot panel showing the padlock (orange engaged, white released);
   one pure source for tray, title bar, taskbar and exe (regenerated .ico
@@ -50,7 +55,7 @@ near-black panel:
   window and defines the icon and overlay geometry; the approved mockups
   (`docs/design/dot-matrix/mockups/`) show exactly what the code will
   render, because they were generated from the same geometry.
-- The egui window loses native widgets (no text selection, no theming);
+- The egui window loses native widgets and native window chrome (no text selection, no theming);
   buttons are hit-tested in grid coordinates and the panel is one uploaded
   texture per frame.
 - Dots are sized in physical pixels, so the grid snaps to the display DPI

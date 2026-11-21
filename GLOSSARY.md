@@ -50,6 +50,18 @@ _Avoid_: background, grid line, placeholder
 One of the two brighter dots that orbit the picker ring on opposite sides, showing the ring is live. The only continuous animation in the app.
 _Avoid_: cursor, spinner, indicator
 
+**Title strip**:
+The top rows of the frameless window, above the first separator: the heading and the two window controls. Dragging it moves the window. There is no native title bar.
+_Avoid_: title bar, header, caption
+
+**Minimise**:
+The title-strip control (a dot frame with a bar) that minimises the window to the taskbar. There is no maximise.
+_Avoid_: hide, collapse, maximise
+
+**Close**:
+The title-strip control (a dot frame with an X) that closes the window to the tray; the app keeps running and the Lock is unaffected. Exit is the EXIT button.
+_Avoid_: quit, exit, X button
+
 **Hollow**:
 The suspended state of the padlock glyph: the outline only, in the same orange as locked.
 _Avoid_: outline mode, ghost, disabled
