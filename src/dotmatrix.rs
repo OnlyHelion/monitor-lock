@@ -797,6 +797,27 @@ pub enum StateKey {
     Picking,
 }
 
+/// The colour of a state-change wave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaveColour {
+    /// Released/picking -> engaged: dots brighten toward ORANGE.
+    Orange,
+    /// Any state -> released: dots brighten toward WHITE.
+    White,
+}
+
+/// Which wave (if any) a state change plays. Orange when the Lock engages
+/// from released or picking; white when it goes to released from a different
+/// state; nothing for suspended in or out, entering picking, or no change.
+pub fn wave_colour(prev: StateKey, new: StateKey) -> Option<WaveColour> {
+    use StateKey::{Engaged, Picking, Released, Suspended};
+    match (prev, new) {
+        (Released | Picking, Engaged) => Some(WaveColour::Orange),
+        (Suspended | Engaged | Picking, Released) => Some(WaveColour::White),
+        _ => None,
+    }
+}
+
 /// Derive the effective state key from a snapshot. Precedence: picking,
 /// engaged, suspended, released — the same derivation the poll thread (the
 /// engaged edge) and the old UI (the suspended hint) used, in one place.
@@ -1704,6 +1725,34 @@ mod tests {
         let on_front = wave_level(70.0, 0.5);
         assert!(on_front > wave_level(5.0, 0.5));
         assert!(on_front > wave_level(130.0, 0.5));
+    }
+
+    #[test]
+    fn wave_colour_covers_every_state_pair() {
+        use StateKey::{Engaged as E, Picking as P, Released as R, Suspended as S};
+        use WaveColour::{Orange as O, White as W};
+        // (previous, new, expected) for all 16 ordered pairs.
+        let table = [
+            (R, R, None),
+            (R, S, None),
+            (R, E, Some(O)),
+            (R, P, None),
+            (S, R, Some(W)),
+            (S, S, None),
+            (S, E, None),
+            (S, P, None),
+            (E, R, Some(W)),
+            (E, S, None),
+            (E, E, None),
+            (E, P, None),
+            (P, R, Some(W)),
+            (P, S, None),
+            (P, E, Some(O)),
+            (P, P, None),
+        ];
+        for (prev, new, want) in table {
+            assert_eq!(wave_colour(prev, new), want, "{prev:?} -> {new:?}");
+        }
     }
 
     #[test]

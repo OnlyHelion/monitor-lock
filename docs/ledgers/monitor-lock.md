@@ -21,6 +21,7 @@
 - 2026-11-22 #15 frameless window (branch ticket/15-frameless): with_decorations(false); dotmatrix title_strip rows 0..17 + minimise (95,5) / close (109,5) 11x11, pure title_hit; StartDrag, Minimized, close=hide to tray. Needs user eyeball at 100/125/150 % DPI.
 - 2026-11-22 #16 icon = dot padlock only (branch ticket/16-icon-padlock-only): monitor silhouette removed; rounded dark tile (r .14) with 18x18 dot grid (side .88), orange/white padlock; .ico regenerated. Needs user eyeball: tray, Alt+Tab, taskbar, Explorer.
 - 2026-11-22 #17 icon third state (branch ticket/17-icon-suspended): icon::Art {Engaged,Released,Suspended} + pure Art::for_state(StateKey) (picking->released); hollow orange padlock; tray/title/taskbar follow full StateKey. .ico unchanged. Eyeball: tray + taskbar on pin/focus loss.
+- 2026-11-22 #18 wave rules (branch ticket/18-wave-rules): pure dotmatrix::wave_colour(prev,new)->Option<WaveColour{Orange,White}>; orange released/picking->engaged, white ->released, none for suspended/picking/same. app.rs blends toward the colour. Eyeball: each transition.
 
 ## Archive
 - 2026-11-12 #5 hand-check loop (user reports, diagnoses, pipeline history) moved unchanged: `docs/ledgers/archive/monitor-lock-handcheck-loop-2026-11-12.md`.
