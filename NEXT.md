@@ -6,12 +6,13 @@ Updated: 2026-11-22 · Tickets #13-#15 implemented + code-reviewed + merged into
    - #13: DETAILS open with 1 and 2+ monitors: no overlap, no cut-off at right/bottom; click again shrinks. 7 lines = 715 pt tall: does it fit the screen at 125/150 %? (cap NOT implemented.)
    - #14: wave = discrete dots (3 levels, WAVE_LEVELS) on ENGAGED/RELEASED/SUSPENDED/PICKING; once per change, not on first show.
    - #15: no native frame; dot title strip + `_` + `X`; drag the strip moves the window (also when DETAILS grown); `_` minimises, taskbar restores; `X` hides to tray; hand cursor over both; taskbar entry/Alt+Tab/icon swap OK; crisp at 100/125/150 % DPI. UNVERIFIED on screen: StartDrag/Minimized on undecorated eframe 0.37.
+   - #16 (user: icon was a monitor+dot-panel mix, wanted ONLY the dot padlock): icon = dark rounded tile with 18x18 dots + padlock, no monitor. Check tray, Alt+Tab, taskbar, Explorer (icon cache may need refresh), both states, live swap. Previews in _notes/icon-*.png (gitignored).
    - Review fix: monitor ids now shown without `\\.\` prefix (DISPLAY1) in the TARGET status row and DETAILS rows.
-2. Then (only after user's FULL confirmation): merge `dot-matrix` -> master (ff), bump 0.1.3 -> 0.2.0, tag v*, push, watch first CI run (ci.yml UNVERIFIED on GitHub). Close #8-#15. Remove worktrees K:\wt\monitor-lock-9|10|11|12|review + their ticket branches.
+2. Then (only after user's FULL confirmation): merge `dot-matrix` -> master (ff), bump 0.1.3 -> 0.2.0, tag v*, push, watch first CI run (ci.yml UNVERIFIED on GitHub). Close #8-#16. Remove worktrees K:\wt\monitor-lock-9|10|11|12|review + their ticket branches.
 3. No PR (direct master commits + v* tag).
 
 ## State now
-- (verified) `dot-matrix` = e4a92cd. fmt/clippy clean, `cargo test` 111/111. Tickets #13-#15 + review-fix branches merged --no-ff and deleted; their worktrees removed. Issues #8-#15 still OPEN on purpose.
+- (verified) `dot-matrix` = see git log (#16 icon merged). fmt/clippy clean, `cargo test` 112/112. Tickets #13-#16 + review-fix branches merged --no-ff and deleted; their worktrees removed. Issues #8-#16 still OPEN on purpose (close on release).
 - Old worktrees still present: K:\wt\monitor-lock-9|10|11|12|review (all merged).
 - ADR 0001 amended (discrete wave, frameless window); GLOSSARY has Title strip/Minimise/Close.
 - Carried, UNVERIFIED: pin-mode Alt+Tab release on this Win11 build (if it holds the lock, add the foreground class to is_shell_ui_class in src/win32.rs). Hovering the Monitor Lock window can disturb the clip: close to tray for in-game checks.
