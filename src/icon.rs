@@ -1,6 +1,6 @@
 //! The app icon: the dot-matrix padlock panel and nothing else — a dark
-//! rounded tile of 18×18 dots with the solid padlock lit locked-orange when
-//! engaged, white when released. No monitor silhouette. Pure pixel art (no Win32), so it is drawn at any size and
+//! rounded tile of 18×18 dots with the padlock lit: solid orange when
+//! engaged, solid white when released, hollow orange when suspended. No monitor silhouette. Pure pixel art (no Win32), so it is drawn at any size and
 //! unit-tested.
 //!
 //! One source for every place the icon appears: the tray (swapped on state
@@ -42,11 +42,43 @@ const PANEL_TOP: f32 = PANEL_LEFT;
 #[cfg(test)]
 pub const ICO_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
 
+/// The three icon arts: the same tile and off-dots, only the padlock differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Art {
+    /// Solid orange padlock (the exe icon too).
+    Engaged,
+    /// Solid white padlock.
+    Released,
+    /// Hollow orange padlock: a pin is set but the Lock is released.
+    Suspended,
+}
+
+impl Art {
+    /// Every art, in `index` order.
+    pub const ALL: [Art; 3] = [Art::Engaged, Art::Released, Art::Suspended];
+
+    /// The icon for a window state. Picking paints the window's padlock solid
+    /// white (dotmatrix::panel_content), so it shares the released art.
+    pub fn for_state(key: dotmatrix::StateKey) -> Art {
+        use dotmatrix::StateKey;
+        match key {
+            StateKey::Engaged => Art::Engaged,
+            StateKey::Suspended => Art::Suspended,
+            StateKey::Released | StateKey::Picking => Art::Released,
+        }
+    }
+
+    /// Position in `ALL`, for per-art caches.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+}
+
 /// The icon as `size`x`size` top-down RGBA pixels, transparent background,
 /// anti-aliased by 4x4 supersampling.
-pub fn rgba(size: u32, engaged: bool) -> Vec<u8> {
+pub fn rgba(size: u32, art: Art) -> Vec<u8> {
     const SS: u32 = 4;
-    let panel = panel_cells(engaged);
+    let panel = panel_cells(art);
     let mut out = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
         for x in 0..size {
@@ -86,14 +118,18 @@ fn color_at(u: f32, v: f32, panel: &[[u8; 3]; 18 * 18]) -> Option<[u8; 3]> {
     None
 }
 
-/// The 18×18 panel's cell colours, row-major: the solid padlock lit (orange
-/// engaged, white released), every other cell the off-dot colour. The padlock
+/// The 18×18 panel's cell colours, row-major: the padlock lit (solid orange
+/// engaged, solid white released, hollow orange suspended), every other cell the off-dot colour. The padlock
 /// cells come from the one source (dotmatrix.rs) — the same glyph the window
 /// stamps.
-fn panel_cells(engaged: bool) -> [[u8; 3]; 18 * 18] {
-    let lit = if engaged { LOCKED } else { FREE };
+fn panel_cells(art: Art) -> [[u8; 3]; 18 * 18] {
+    let (lit, glyph) = match art {
+        Art::Engaged => (LOCKED, dotmatrix::Padlock::Solid),
+        Art::Released => (FREE, dotmatrix::Padlock::Solid),
+        Art::Suspended => (LOCKED, dotmatrix::Padlock::Hollow),
+    };
     let mut cells = [PANEL_OFF; 18 * 18];
-    for (col, row) in dotmatrix::padlock_cells(dotmatrix::Padlock::Solid) {
+    for (col, row) in dotmatrix::padlock_cells(glyph) {
         cells[(row * 18 + col) as usize] = lit;
     }
     cells
@@ -143,7 +179,7 @@ fn in_round_rect(u: f32, v: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> 
 pub fn ico_bytes() -> Vec<u8> {
     let images: Vec<(u32, Vec<u8>)> = ICO_SIZES
         .iter()
-        .map(|&s| (s, bmp_image(s, &rgba(s, true))))
+        .map(|&s| (s, bmp_image(s, &rgba(s, Art::Engaged))))
         .collect();
     let mut out = Vec::new();
     // ICONDIR: reserved, type 1 (icon), count.
@@ -207,8 +243,52 @@ mod tests {
     }
 
     #[test]
+    fn the_icon_art_follows_the_full_state() {
+        use crate::dotmatrix::StateKey;
+        assert_eq!(Art::for_state(StateKey::Engaged), Art::Engaged);
+        assert_eq!(Art::for_state(StateKey::Suspended), Art::Suspended);
+        assert_eq!(Art::for_state(StateKey::Released), Art::Released);
+        // Picking paints the window's padlock solid white: the icon matches.
+        assert_eq!(Art::for_state(StateKey::Picking), Art::Released);
+    }
+
+    #[test]
+    fn suspended_is_the_hollow_orange_padlock_on_the_same_tile() {
+        const S: u32 = 256;
+        const N: u32 = 18;
+        let pitch = PANEL_SIDE / N as f32;
+        let (eng, rel, sus) = (
+            rgba(S, Art::Engaged),
+            rgba(S, Art::Released),
+            rgba(S, Art::Suspended),
+        );
+        let px = |(col, row): (u32, u32), img: &[u8]| -> [u8; 3] {
+            let x = ((PANEL_LEFT + (col as f32 + 0.5) * pitch) * S as f32) as u32;
+            let y = ((PANEL_TOP + (row as f32 + 0.5) * pitch) * S as f32) as u32;
+            let i = ((y * S + x) * 4) as usize;
+            [img[i], img[i + 1], img[i + 2]]
+        };
+        let alpha = |p: &[u8]| p.chunks(4).map(|c| c[3]).collect::<Vec<_>>();
+        assert_eq!(alpha(&sus), alpha(&eng), "same tile outline");
+        let hollow = dotmatrix::padlock_cells(dotmatrix::Padlock::Hollow);
+        let solid = dotmatrix::padlock_cells(dotmatrix::Padlock::Solid);
+        // An outline cell is lit orange (also in the solid art).
+        let outline = *hollow.iter().find(|c| solid.contains(c)).unwrap();
+        assert_eq!(px(outline, &sus), [255, 179, 71]);
+        // A body cell inside the outline is unlit in suspended, lit when engaged.
+        let inside = *solid.iter().find(|c| !hollow.contains(c)).unwrap();
+        assert_eq!(px(inside, &sus), [38, 40, 46], "hollow: interior is off");
+        assert_eq!(px(inside, &eng), [255, 179, 71]);
+        assert_eq!(px(inside, &rel), [232, 232, 236]);
+        // Off-dots and margin identical to the other states.
+        assert_eq!(px((0, 0), &sus), [38, 40, 46]);
+        assert_ne!(sus, eng);
+        assert_ne!(sus, rel);
+    }
+
+    #[test]
     fn the_states_share_one_outline() {
-        let (on, off) = (rgba(32, true), rgba(32, false));
+        let (on, off) = (rgba(32, Art::Engaged), rgba(32, Art::Released));
         assert_ne!(on, off);
         // The tile's outline (alpha) is the same in both states.
         let alpha = |p: &[u8]| p.chunks(4).map(|c| c[3]).collect::<Vec<_>>();
@@ -220,7 +300,7 @@ mod tests {
         // Panel background and off-dots paint identically in both states;
         // every differing pixel is a lit padlock dot (orange vs white).
         const S: u32 = 256;
-        let (on, off) = (rgba(S, true), rgba(S, false));
+        let (on, off) = (rgba(S, Art::Engaged), rgba(S, Art::Released));
         let mut differing = 0;
         for i in (0..on.len()).step_by(4) {
             if on[i..i + 4] != off[i..i + 4] {
@@ -242,7 +322,7 @@ mod tests {
         // The dot panel fills the whole icon: a dark tile with rounded
         // corners (transparent outside), no bezel, neck or base.
         const S: u32 = 256;
-        let img = rgba(S, true);
+        let img = rgba(S, Art::Engaged);
         let at = |u: f32, v: f32| {
             let i = (((v * S as f32) as u32 * S + (u * S as f32) as u32) * 4) as usize;
             [img[i], img[i + 1], img[i + 2], img[i + 3]]
@@ -270,7 +350,7 @@ mod tests {
         const S: u32 = 256;
         const N: u32 = 18;
         let pitch = PANEL_SIDE / N as f32;
-        let (engaged, released) = (rgba(S, true), rgba(S, false));
+        let (engaged, released) = (rgba(S, Art::Engaged), rgba(S, Art::Released));
         let px = |u: f32, v: f32, img: &[u8]| -> [u8; 3] {
             let x = (u * S as f32) as u32;
             let y = (v * S as f32) as u32;

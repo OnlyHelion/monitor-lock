@@ -16,23 +16,22 @@ use crate::dotmatrix;
 use crate::icon;
 use crate::win32;
 
-/// The two pre-built tray icons: one per Lock state, swapped on state change
-/// so the state is visible at a glance (user story 14). The window's icons
-/// swap along with them (`win32::set_main_window_icon`).
+/// The pre-built tray icons, one per `icon::Art`, swapped on state change so
+/// the state is visible at a glance (user story 14). The window's icons swap
+/// along with them (`win32::set_main_window_icon`).
 pub struct TrayIcons {
-    /// Engaged: amber screen with a padlock — the cursor is confined to the
-    /// Game monitor.
-    pub engaged: Icon,
-    /// Released: dark gray screen — the cursor is free on all monitors.
-    pub released: Icon,
+    icons: [Icon; 3],
 }
 
 impl TrayIcons {
     pub fn new() -> Self {
         Self {
-            engaged: tray_icon(true),
-            released: tray_icon(false),
+            icons: icon::Art::ALL.map(tray_icon),
         }
+    }
+
+    pub fn get(&self, art: icon::Art) -> &Icon {
+        &self.icons[art.index()]
     }
 }
 
@@ -76,7 +75,7 @@ pub struct MonitorLockApp {
     pub(crate) shared: Arc<Mutex<core::LockSnapshot>>,
     pub(crate) tray: TrayIcon,
     pub(crate) icons: TrayIcons,
-    pub(crate) state_rx: mpsc::Receiver<bool>,
+    pub(crate) state_rx: mpsc::Receiver<dotmatrix::StateKey>,
     /// Sends user commands (tray menu / window buttons) to the poll thread.
     pub(crate) cmd_tx: mpsc::Sender<UiCommand>,
     /// When the one-shot state-change wave started (None: not playing).
@@ -106,14 +105,10 @@ impl eframe::App for MonitorLockApp {
         }
         // Lock-state changes reported by the poll thread: swap the tray and
         // window icons.
-        while let Ok(engaged) = self.state_rx.try_recv() {
-            let icon = if engaged {
-                self.icons.engaged.clone()
-            } else {
-                self.icons.released.clone()
-            };
-            let _ = self.tray.set_icon(Some(icon));
-            win32::set_main_window_icon(engaged);
+        while let Ok(key) = self.state_rx.try_recv() {
+            let art = icon::Art::for_state(key);
+            let _ = self.tray.set_icon(Some(self.icons.get(art).clone()));
+            win32::set_main_window_icon(art);
         }
 
         let snap = self.shared.lock().unwrap().clone();
@@ -345,18 +340,18 @@ pub fn install_tray_handlers(ctx: egui::Context, cmd_tx: mpsc::Sender<UiCommand>
     }));
 }
 
-/// A tray icon for one Lock state, drawn by `icon::rgba` at 32x32 (Windows
+/// A tray icon for one art, drawn by `icon::rgba` at 32x32 (Windows
 /// scales it to the tray's size).
-fn tray_icon(engaged: bool) -> Icon {
-    Icon::from_rgba(icon::rgba(32, engaged), 32, 32).expect("a 32x32 RGBA buffer is a valid icon")
+fn tray_icon(art: icon::Art) -> Icon {
+    Icon::from_rgba(icon::rgba(32, art), 32, 32).expect("a 32x32 RGBA buffer is a valid icon")
 }
 
 /// The window's startup icon (released art). Without one, eframe shows its
 /// own default (the egui logo). Later swaps go through
 /// `win32::set_main_window_icon`, which also sets the taskbar's big icon.
-pub fn window_icon(engaged: bool) -> egui::IconData {
+pub fn window_icon(art: icon::Art) -> egui::IconData {
     egui::IconData {
-        rgba: icon::rgba(64, engaged),
+        rgba: icon::rgba(64, art),
         width: 64,
         height: 64,
     }

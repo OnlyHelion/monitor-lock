@@ -67,13 +67,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // released state; the poll thread reports state changes and the UI
     // thread swaps the icon (user story 14).
     let icons = app::TrayIcons::new();
-    let tray = app::create_tray(&icons.released)?;
+    let tray = app::create_tray(icons.get(icon::Art::Released))?;
 
     // Poll thread: reads the SystemAccess seam, feeds the brain, publishes
     // the snapshot for the window, reports Lock-state changes to the UI
     // thread, and drives the Monitor picker's overlay. ~100 ms (spec); ~50
     // ms while the picker is active.
-    let (state_tx, state_rx) = std::sync::mpsc::channel::<bool>();
+    let (state_tx, state_rx) = std::sync::mpsc::channel::<dotmatrix::StateKey>();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<app::UiCommand>();
     let shared: std::sync::Arc<std::sync::Mutex<core::LockSnapshot>> =
         std::sync::Arc::new(std::sync::Mutex::new(core::LockSnapshot::default()));
@@ -86,8 +86,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 20 — the clip is global Windows state).
         brain.startup(&mut sys);
         // The tray starts with the released icon, so only report when the
-        // engaged state actually changes.
-        let mut last_engaged: Option<bool> = Some(false);
+        // state key actually changes.
+        let mut last_key: Option<dotmatrix::StateKey> = Some(dotmatrix::StateKey::Released);
         // Rising-edge debounce for the picker's Esc / click (a held key or
         // button must not fire again after the picker restarts).
         let mut esc_down = false;
@@ -111,10 +111,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let snap = brain.update(&mut sys);
-            let engaged = matches!(snap.lock, core::LockState::Engaged { .. });
-            if last_engaged != Some(engaged) {
-                let _ = state_tx.send(engaged);
-                last_engaged = Some(engaged);
+            let key = dotmatrix::state_key(&snap);
+            if last_key != Some(key) {
+                let _ = state_tx.send(key);
+                last_key = Some(key);
             }
             *poll_shared.lock().unwrap() = snap.clone();
 
@@ -175,7 +175,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // close, and drags the window (ticket #15).
             .with_decorations(false)
             // The tray starts released, so the window does too.
-            .with_icon(app::window_icon(false)),
+            .with_icon(app::window_icon(icon::Art::Released)),
         ..Default::default()
     };
     eframe::run_native(
