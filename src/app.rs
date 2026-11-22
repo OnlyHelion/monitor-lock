@@ -84,12 +84,20 @@ pub struct MonitorLockApp {
     pub(crate) wave_colour: dotmatrix::WaveColour,
     /// The last rendered state key (a change starts a fresh wave).
     pub(crate) prev_key: Option<dotmatrix::StateKey>,
-    /// The DETAILS diagnostic rows are shown (the window grows with them).
+    /// The DETAILS diagnostic rows are shown (the window is the fixed
+    /// 625-point height; the detail rows scroll).
     pub(crate) details_open: bool,
     /// The last requested inner height (points).
     pub(crate) inner_h: f32,
     /// The cursor shows a pointing hand (hovering an enabled button).
     pub(crate) cursor_hand: bool,
+    /// The detail rows' scroll offset, in cell rows (0: the first row is
+    /// visible).
+    pub(crate) detail_scroll: u32,
+    /// The wheel's fractional remainder, in detail rows: Point-unit
+    /// (trackpad) deltas arrive as fractions of a row, so accumulate them
+    /// and step on the integer part.
+    pub(crate) detail_scroll_frac: f32,
 }
 
 impl eframe::App for MonitorLockApp {
@@ -138,10 +146,29 @@ impl eframe::App for MonitorLockApp {
 
         // The panel content (padlock, the three status rows, the detail
         // rows) and the settled layout, in cells.
-        let (mut map, placed) =
+        let (full_map, placed) =
             dotmatrix::layout(&dotmatrix::panel_content(&snap, key, self.details_open));
+
+        // With DETAILS open the window is the fixed 125 rows (625 points,
+        // the user's pick): the detail rows (row 78 and below) scroll and
+        // the top bar (title strip with `_` / `X`) stays pinned. Closed,
+        // the 80-row base grid.
+        let detail_max_s = self
+            .details_open
+            .then(|| dotmatrix::details_max_scroll(full_map.rows()));
+        let (mut map, rows) = match detail_max_s {
+            Some(max_s) => {
+                let scroll = self.detail_scroll.min(max_s);
+                let mut m = dotmatrix::details_visible_map(&full_map, scroll);
+                dotmatrix::draw_detail_scrollbar(&mut m, scroll, max_s);
+                (m, dotmatrix::DETAILS_OPEN_ROWS)
+            }
+            None => {
+                let rows = full_map.rows();
+                (full_map, rows)
+            }
+        };
         let cols = map.cols();
-        let rows = map.rows();
 
         // PICK is dim and dead while the picker is active (the Lock is
         // released while picking; a repeated start would be a no-op anyway).
@@ -254,6 +281,52 @@ impl eframe::App for MonitorLockApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
+            // While DETAILS is open the wheel or `↑` / `↓` scrolls the
+            // detail area (a negative wheel y is a scroll down).
+            let (wheel_rows, up, down) = ctx.input(|i| {
+                // Count wheel events, not delta magnitude: egui multiplies
+                // line-unit wheel deltas by `line_scroll_speed` (40 on
+                // native) before they reach `smooth_scroll_delta`, so the
+                // magnitude is ~40 rows per notch — far more than the detail
+                // list is long (one notch would slam the view to the far
+                // end). The raw events carry the unscaled delta: a notch
+                // (Line unit) scrolls 3 detail rows (1 per notch was too
+                // slow, the user's 2026-11-22 verdict); Point units
+                // (trackpads) convert at 5 points per row; a Page is 30 rows.
+                let mut wheel_rows = 0.0f32;
+                for e in &i.events {
+                    if let egui::Event::MouseWheel { unit, delta, .. } = e {
+                        wheel_rows += match unit {
+                            egui::MouseWheelUnit::Line => delta.y * 3.0,
+                            egui::MouseWheelUnit::Page => delta.y * 30.0,
+                            egui::MouseWheelUnit::Point => delta.y / 5.0,
+                        };
+                    }
+                }
+                (
+                    wheel_rows,
+                    i.key_down(egui::Key::ArrowUp),
+                    i.key_down(egui::Key::ArrowDown),
+                )
+            });
+            if let Some(max_s) = detail_max_s {
+                // A negative wheel y is a scroll down. Notches arrive as
+                // whole rows already; Point-unit deltas arrive as fractions
+                // of a row, so accumulate them and step on the integer part.
+                self.detail_scroll_frac += -wheel_rows;
+                let step = self.detail_scroll_frac.trunc() as i32;
+                self.detail_scroll_frac -= step as f32;
+                let mut s = self.detail_scroll as i32;
+                s += step;
+                if up {
+                    s -= 1;
+                }
+                if down {
+                    s += 1;
+                }
+                self.detail_scroll = s.clamp(0, max_s as i32) as u32;
+            }
+
             if clicked {
                 if title == Some(dotmatrix::TitleHit::Minimise) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -268,6 +341,8 @@ impl eframe::App for MonitorLockApp {
                     exit_app();
                 } else if over_details {
                     self.details_open = !self.details_open;
+                    self.detail_scroll = 0; // reopen at the top
+                    self.detail_scroll_frac = 0.0;
                 }
             }
 
@@ -286,8 +361,9 @@ impl eframe::App for MonitorLockApp {
             }
         });
 
-        // The detail rows grow the grid; the window follows (and shrinks
-        // back): 5 points per cell row, 640 points wide.
+        // The window follows the grid's row count (5 points per row, 640
+        // points wide): with DETAILS open that is the fixed 125 rows
+        // (625 points; the detail rows scroll), otherwise the 80-row base.
         let want_h = rows as f32 * 5.0;
         if (want_h - self.inner_h).abs() > f32::EPSILON {
             self.inner_h = want_h;

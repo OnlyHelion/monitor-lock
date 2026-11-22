@@ -46,6 +46,17 @@ pub const CHASER_TAILS: [(f32, u8); 2] = [(14.0, 102), (28.0, 51)];
 /// (ticket #10, ADR 0001).
 pub const CHASER_PERIOD_SECS: f32 = 6.0;
 
+/// The DETAILS-open window height, in cell rows (5 points per row): 625
+/// points — the user's pick from the height-variant prototype (2026-11-22).
+/// The detail rows (row 78 and below) scroll inside it; the top bar (title
+/// strip with `_` / `X`) stays pinned.
+pub const DETAILS_OPEN_ROWS: u32 = 125;
+
+/// The first detail-row cell row (rows below it scroll; everything above —
+/// including the title strip — is pinned). Equals `layout`'s
+/// `DETAIL_ORIGIN.1`.
+pub const DETAIL_TOP: u32 = 78;
+
 /// A cell coordinate: (col, row), column first.
 pub type Cell = (u32, u32);
 
@@ -437,7 +448,7 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
     const BUTTON_W: u32 = 27; // 6n+3 for the 4-char labels: inner 6n−1 + 2-cell margins
     const BUTTON_H: u32 = 11;
     const DETAILS: (u32, u32, u32, u32) = (8, 68, 41, 7); // col, row, w, h
-    const DETAIL_ORIGIN: Cell = (8, 78); // 2 blank rows under the DETAILS label
+    const DETAIL_ORIGIN: Cell = (8, DETAIL_TOP); // 2 blank rows under the DETAILS label
     const DETAIL_STEP: u32 = 9; // TEXT_ROWS + 2 blank dot-rows, like the status rows
     const TEXT_ROWS: u32 = 7; // the 5×7 font's row height
     // The frameless title strip: the rows above the first separator. The
@@ -551,6 +562,63 @@ pub fn layout(content: &Panel) -> (CellMap, Placed) {
         close,
     };
     (map, placed)
+}
+
+/// How far the detail rows may shift up when the DETAILS-open window
+/// (125 rows) is shorter than the content (0: everything fits, nothing
+/// scrolls).
+pub fn details_max_scroll(full_rows: u32) -> u32 {
+    full_rows.saturating_sub(DETAILS_OPEN_ROWS)
+}
+
+/// The DETAILS-open window (125 rows): rows 0..DETAIL_TOP-1 pinned as-is,
+/// the detail area (row 78 and below) shifted up by `scroll` rows, off-dots
+/// where the content has run out.
+pub fn details_visible_map(full: &CellMap, scroll: u32) -> CellMap {
+    let h = DETAILS_OPEN_ROWS;
+    let cols = full.cols();
+    let mut out = CellMap::new(cols, h);
+    for r in 0..h {
+        // Window row r shows full row r + scroll; the pinned rows (0..77)
+        // map 1:1, so the top bar never moves.
+        let src = if r < DETAIL_TOP { r } else { r + scroll };
+        for c in 0..cols {
+            out.set(
+                c,
+                r,
+                if src < full.rows() {
+                    full.get(c, src)
+                } else {
+                    OFF
+                },
+            );
+        }
+    }
+    out
+}
+
+/// A dot-matrix scrollbar in the right margin (col 126): a dim track for the
+/// visible detail area and a bright thumb sized and positioned by the scroll
+/// fraction. A no-op with nothing to scroll. (A max-width detail row can
+/// reach this column; the thumb stays readable next to the soft text.)
+pub fn draw_detail_scrollbar(map: &mut CellMap, scroll: u32, max_s: u32) {
+    const BAR_COL: u32 = 126;
+    if max_s == 0 {
+        return; // nothing to scroll
+    }
+    let track_top = DETAIL_TOP;
+    let track_bottom = DETAILS_OPEN_ROWS.saturating_sub(2); // keep a 1-row bottom margin
+    let track_len = track_bottom.saturating_sub(track_top) + 1;
+    // Thumb proportional to the visible fraction of the content, min 3 dots.
+    let thumb = (track_len * DETAILS_OPEN_ROWS / (DETAILS_OPEN_ROWS + max_s)).max(3);
+    let span = track_len.saturating_sub(thumb);
+    let pos = (scroll as u64 * span as u64 / max_s as u64) as u32;
+    for r in track_top..=track_bottom {
+        map.set(BAR_COL, r, DIML);
+    }
+    for i in 0..thumb {
+        map.set(BAR_COL, track_top + pos + i, WHITE);
+    }
 }
 
 /// Render a cell map into a `width`×`height` top-down RGBA buffer (4 bytes per
@@ -1470,6 +1538,102 @@ mod tests {
         let expect = |n: u32| origin_row + (n - 1) * step + 7 + 4;
         assert_eq!(rows(1), expect(1));
         assert_eq!(rows(7), expect(7)); // 143 rows = 715 pt at 5 pt/row
+    }
+
+    #[test]
+    fn details_max_scroll_zero_when_the_content_fits() {
+        // 5 detail rows: 78 + 4*9 + 7 + 4 = 125 rows — exactly the window.
+        let (map, _) = layout(&engaged_panel(vec!["FG: A"; 5]));
+        assert_eq!(map.rows(), DETAILS_OPEN_ROWS);
+        assert_eq!(details_max_scroll(map.rows()), 0, "everything fits");
+        // 6 rows overflow by one step; 7 rows by two.
+        assert_eq!(
+            details_max_scroll(layout(&engaged_panel(vec!["FG: A"; 6])).0.rows()),
+            9
+        );
+        assert_eq!(
+            details_max_scroll(layout(&engaged_panel(vec!["FG: A"; 7])).0.rows()),
+            18
+        );
+    }
+
+    #[test]
+    fn details_visible_map_pins_the_top_bar_and_shifts_the_detail_area() {
+        let full = layout(&engaged_panel(vec!["FG: A"; 7])).0; // 143 rows
+        assert_eq!(full.rows(), 143);
+        let m0 = details_visible_map(&full, 0);
+        assert_eq!(m0.rows(), DETAILS_OPEN_ROWS);
+        // Pinned: rows 0..DETAIL_TOP are identical to the full map.
+        for r in 0..DETAIL_TOP {
+            for c in 0..full.cols() {
+                assert_eq!(m0.get(c, r), full.get(c, r), "pinned row {r} col {c}");
+            }
+        }
+        // At the top the first detail row is the content's first one.
+        assert_eq!(m0.get(8, DETAIL_TOP), SOFT, "row 78: first detail row");
+        // Scrolling 3 rows: every detail-area window row r shows the full
+        // map's row r + 3 (the content shifts up, nothing is duplicated).
+        let m3 = details_visible_map(&full, 3);
+        for r in DETAIL_TOP..DETAILS_OPEN_ROWS {
+            for c in 0..full.cols() {
+                assert_eq!(m3.get(c, r), full.get(c, r + 3), "row {r} col {c}");
+            }
+        }
+        // At the maximum scroll the last detail row (132) is visible.
+        let max_s = details_max_scroll(full.rows());
+        let mmax = details_visible_map(&full, max_s);
+        assert_eq!(
+            mmax.get(8, DETAIL_TOP + 6 * 9 - max_s),
+            SOFT,
+            "last detail row"
+        );
+        // A scroll past the end of the content shows off-dots — never a
+        // duplicated panel top (the 2026-11-22 bug).
+        let mfar = details_visible_map(&full, full.rows());
+        for r in DETAIL_TOP..DETAILS_OPEN_ROWS {
+            assert_eq!(mfar.get(8, r), OFF, "row {r}");
+        }
+        assert_eq!(mfar.get(8, 7), WHITE, "pinned heading stays");
+    }
+
+    #[test]
+    fn detail_scrollbar_is_absent_when_the_content_fits() {
+        let (full, _) = layout(&engaged_panel(vec!["FG: A"; 5])); // exactly 125 rows
+        let mut m = details_visible_map(&full, 0);
+        draw_detail_scrollbar(&mut m, 0, details_max_scroll(full.rows()));
+        for r in 0..DETAILS_OPEN_ROWS {
+            assert_eq!(m.get(126, r), OFF, "row {r}");
+        }
+    }
+
+    #[test]
+    fn detail_scrollbar_thumb_tracks_the_scroll_position() {
+        let (full, _) = layout(&engaged_panel(vec!["FG: A"; 7])); // 143 rows
+        let max_s = details_max_scroll(full.rows());
+        let track_top = DETAIL_TOP;
+        let track_bottom = DETAILS_OPEN_ROWS - 2;
+        // At the top: the thumb starts at the track top.
+        let mut m0 = details_visible_map(&full, 0);
+        draw_detail_scrollbar(&mut m0, 0, max_s);
+        assert_eq!(m0.get(126, track_top), WHITE, "thumb at the track top");
+        assert_eq!(
+            m0.get(126, track_bottom),
+            DIML,
+            "track continues below the thumb"
+        );
+        // At the bottom: the thumb ends at the track bottom.
+        let mut mmax = details_visible_map(&full, max_s);
+        draw_detail_scrollbar(&mut mmax, max_s, max_s);
+        assert_eq!(
+            mmax.get(126, track_bottom),
+            WHITE,
+            "thumb at the track bottom"
+        );
+        assert_eq!(
+            mmax.get(126, track_top),
+            DIML,
+            "track continues above the thumb"
+        );
     }
 
     #[test]

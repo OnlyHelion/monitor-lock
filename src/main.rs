@@ -8,10 +8,12 @@
 //! actions. The thin layer has no unit tests; it is verified by the user's
 //! in-game hand-check (ticket #5).
 
-// Release builds are a Windows GUI app: no console window. (Debug builds keep
-// the console for `cargo run`.) A panic then has nowhere to print, so main
-// installs a hook that writes it to `monitor-lock-panic.log` next to the exe.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// A Windows GUI app in every build: double-clicking the exe (debug or
+// release) must not open a console window. `cargo run` still shows output in
+// the terminal it was started from (the child inherits its console). A panic
+// has nowhere to print, so main installs a hook that writes it to
+// `monitor-lock-panic.log` next to the exe.
+#![windows_subsystem = "windows"]
 
 mod core;
 mod dotmatrix;
@@ -30,7 +32,7 @@ mod app;
 
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // No console in release builds: write panics to a log file beside the
+    // No console in any build: write panics to a log file beside the
     // exe (falls back to the temp dir) so the next report has a trace.
     std::panic::set_hook(Box::new(|info| {
         let dir = std::env::current_exe()
@@ -197,6 +199,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 details_open: false,
                 inner_h: 400.0,
                 cursor_hand: false,
+                detail_scroll: 0,
+                detail_scroll_frac: 0.0,
             }) as _)
         }),
     )?;
